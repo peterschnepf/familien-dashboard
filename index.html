@@ -1955,7 +1955,8 @@ footer.hint a{color:var(--blue);}
       </div>
       <div>
         <div class="help-section-title">💾 Speicherung &amp; Cloud-Zugriff</div>
-        <p class="help-text">Alle Daten werden automatisch im Browser gespeichert. Über "🔗 Datei verknüpfen" lässt sich zusätzlich eine JSON-Datei live mitschreiben; alternativ stehen "⬇️ Export" und "⬆️ Import" zur Verfügung. Ist Supabase eingerichtet, erscheint stattdessen ein Login: Nach dem Einloggen werden alle Daten in der Cloud gespeichert und automatisch mit allen Familienmitgliedern auf all ihren Geräten synchronisiert (Status oben: "Cloud: verbunden"). Ohne Supabase-Einrichtung läuft die App unverändert rein lokal weiter.</p>
+        <p class="help-text">Alle Daten werden automatisch im Browser gespeichert. Ist Supabase eingerichtet, erscheint zusätzlich ein Login: Nach dem Einloggen werden alle Daten in der Cloud gespeichert und automatisch mit allen Familienmitgliedern auf all ihren Geräten synchronisiert (Status oben: "Cloud: verbunden"). Ohne Supabase-Einrichtung läuft die App unverändert rein lokal weiter.</p>
+        <p class="help-text">"🔗 Datei verknüpfen", "⬇️ Export" und "⬆️ Import" bleiben auch mit Cloud-Sync erhalten — fürs alltägliche Synchronisieren zwischen Geräten braucht man sie dann nicht mehr, sie dienen aber weiterhin als <strong>Backup</strong> (Export lädt jederzeit eine komplette lokale Sicherungskopie herunter, unabhängig von Supabase) und als <strong>Fallback</strong>, falls die App mal ohne Supabase-Zugangsdaten läuft. Wichtig: Ein Import während aktiver Cloud-Verbindung überschreibt automatisch auch den Stand in der Cloud für alle Familienmitglieder — Export ist jederzeit unbedenklich, Import mit Bedacht einsetzen.</p>
       </div>
 
     </div>
@@ -2279,37 +2280,51 @@ async function loadAllFromSupabase(){
 // überzählige Zeilen werden gelöscht). Läuft nach jedem persist() im Hintergrund.
 async function syncAllToSupabase(){
   if(!supabaseClient || !currentUser) return;
+  isSyncingToCloud = true;
   setSyncStatus("syncing");
+  let hadError = false;
   try{
     for(const [localKey, tableName] of Object.entries(SUPABASE_TABLE_MAP)){
       const items = data[localKey] || [];
       const rows = items.filter(it=>it && it.id).map(it=> ({ id: it.id, payload: it }));
       if(rows.length){
         const { error } = await supabaseClient.from(tableName).upsert(rows);
-        if(error) console.warn("Sync fehlgeschlagen:", tableName, error.message);
+        if(error){ console.warn("Sync fehlgeschlagen:", tableName, error.message); hadError = true; }
       }
       const keepIds = rows.map(r=>r.id);
       let delQuery = supabaseClient.from(tableName).delete();
       delQuery = keepIds.length ? delQuery.not("id", "in", `(${keepIds.join(",")})`) : delQuery.gte("created_at", "1900-01-01");
       const { error: delError } = await delQuery;
-      if(delError) console.warn("Aufräumen fehlgeschlagen:", tableName, delError.message);
+      if(delError){ console.warn("Aufräumen fehlgeschlagen:", tableName, delError.message); hadError = true; }
     }
     await supabaseClient.from("app_settings").update({
       payload: { dashboardSettings: data.dashboardSettings, currency: data.currency }
     }).eq("id", true);
-    setSyncStatus("idle");
+    setSyncStatus(hadError ? "error" : "idle");
   }catch(e){
     console.warn("Cloud-Sync fehlgeschlagen", e);
     setSyncStatus("error");
+  } finally {
+    isSyncingToCloud = false;
+    if(pendingRealtimeReload){
+      pendingRealtimeReload = false;
+      loadAllFromSupabase().then(()=>{ renderAll(); });
+    }
   }
 }
+
+let isSyncingToCloud = false;
+let pendingRealtimeReload = false;
 
 function subscribeRealtime(){
   if(!supabaseClient || realtimeChannel) return;
   realtimeChannel = supabaseClient.channel("family-dashboard-changes");
   Object.values(SUPABASE_TABLE_MAP).forEach(tableName=>{
     realtimeChannel.on("postgres_changes", { event: "*", schema: "public", table: tableName }, ()=>{
-      // Einfache, robuste Strategie: bei jeder Fremdänderung alles neu laden und neu rendern.
+      // Während wir selbst gerade hochladen, nicht mittendrin neu laden (sonst Race Condition:
+      // ein noch unvollständiger Zwischenstand würde frisch importierte/angelegte Einträge
+      // wieder überschreiben). Stattdessen einmalig nachholen, sobald der eigene Sync fertig ist.
+      if(isSyncingToCloud){ pendingRealtimeReload = true; return; }
       loadAllFromSupabase().then(()=>{ renderAll(); });
     });
   });
