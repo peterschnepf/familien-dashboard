@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Familien-Dashboard</title>
+<title>FADA Familien-Dashboard</title>
 <style>
 :root{
   --blue:#0a6ed1;
@@ -593,8 +593,8 @@ footer.hint a{color:var(--blue);}
 <div id="authOverlay" style="position:fixed;inset:0;background:var(--bg);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;">
   <div style="background:var(--surface);border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.15);padding:32px;max-width:380px;width:100%;">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-      <div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(135deg,var(--blue-dark),var(--blue));display:flex;align-items:center;justify-content:center;font-size:17px;">🏠</div>
-      <div style="font-size:19px;font-weight:700;">Familien-Dashboard</div>
+      <div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(135deg,var(--blue-dark),var(--blue));display:flex;align-items:center;justify-content:center;font-size:17px;">👨‍👩‍👧‍👦</div>
+      <div style="font-size:19px;font-weight:700;">FADA Familien-Dashboard</div>
     </div>
     <div id="authStatus" style="font-size:12.5px;color:var(--text-secondary);margin-bottom:18px;">Bitte einloggen.</div>
     <div class="field">
@@ -618,7 +618,7 @@ footer.hint a{color:var(--blue);}
 <div class="shell">
 
   <header class="shellbar">
-    <div class="brand"><div class="logo">🏠</div> Familien-Dashboard</div>
+    <div class="brand"><div class="logo">👨‍👩‍👧‍👦</div> FADA Familien-Dashboard</div>
     <div class="tools">
       <div class="status"><span class="dot" id="saveDot"></span><span id="saveLabel">Gespeichert</span></div>
       <div class="status" id="syncStatus" title="Cloud-Synchronisierung"><span class="dot" id="syncDot"></span><span id="syncLabel">Cloud: offline</span></div>
@@ -908,6 +908,13 @@ footer.hint a{color:var(--blue);}
           <input type="text" id="shopSupplier" placeholder="Bevorzugter Lieferant (optional)" style="max-width:180px;">
           <input type="date" id="shopDate" title="Einkaufsdatum (optional)">
           <button class="btn btn-primary" id="btnAddShop">+ Hinzufügen</button>
+        </div>
+        <div style="padding:0 16px 10px;">
+          <label style="font-size:12.5px;font-weight:600;color:var(--text-secondary);margin-right:8px;">Gruppieren nach</label>
+          <select id="shopGroupBy" style="padding:7px 10px;border:1px solid var(--border-strong);border-radius:6px;font-family:inherit;font-size:13px;">
+            <option value="category">Kategorie</option>
+            <option value="supplier">Lieferant</option>
+          </select>
         </div>
         <div class="shop-body" id="shopBody"></div>
         <div class="shop-footer">
@@ -3327,59 +3334,83 @@ function addShopItem(){
   renderDashboard();
 }
 
+function makeShopRow(item){
+  const row = document.createElement("div"); row.className = "shop-item" + (item.done?" done":"");
+  const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=item.done;
+  chk.addEventListener("change", ()=>{ item.done = chk.checked; persist(); renderShopping(); renderDashboard(); });
+  const isManual = !item.linkedInventoryId;
+  const txt = document.createElement("div"); txt.className="txt"; txt.textContent = item.text;
+  if(isManual){
+    txt.style.cursor = "pointer";
+    txt.title = "Klicken zum Bearbeiten";
+    txt.addEventListener("click", ()=> openShopEditModal(item));
+  } else {
+    txt.title = "Automatisch aus Beständen erzeugt (Meldebestand)";
+    txt.style.fontStyle = "italic";
+  }
+  const qty = document.createElement("div"); qty.className="qty"; qty.textContent = item.qty + " " + item.unit;
+  row.appendChild(chk); row.appendChild(txt); row.appendChild(qty);
+  if(item.date){
+    const dateEl = document.createElement("div"); dateEl.className="qty"; dateEl.textContent = parse(item.date).toLocaleDateString("de-DE");
+    row.appendChild(dateEl);
+  }
+  if(item.supplier){
+    const supEl = document.createElement("div"); supEl.className="qty"; supEl.textContent = "🚚 "+item.supplier;
+    row.appendChild(supEl);
+  }
+  if(item.person){
+    const tag = document.createElement("div"); tag.className="person-tag"; tag.textContent=item.person;
+    tag.style.background = colorFor(item.person);
+    row.appendChild(tag);
+  }
+  const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
+  del.addEventListener("click", ()=>{ data.shopping = data.shopping.filter(i=>i.id!==item.id); persist(); renderShopping(); renderDashboard(); });
+  row.appendChild(del);
+  return row;
+}
+
 function renderShopping(){
   const body = document.getElementById("shopBody");
   body.innerHTML = "";
   if(data.shopping.length===0){
     body.innerHTML = '<div class="shop-empty">Die Einkaufsliste ist leer. Füge oben einen Artikel hinzu.</div>';
   } else {
-    CATS_ORDER.forEach(cat=>{
-      const items = data.shopping.filter(i=>i.category===cat);
-      if(items.length===0) return;
-      const block = document.createElement("div"); block.className="shop-cat";
-      const h = document.createElement("h4");
-      h.innerHTML = cat + ` <span class="count">${items.filter(i=>!i.done).length}/${items.length}</span>`;
-      block.appendChild(h);
-      items.forEach(item=>{
-        const row = document.createElement("div"); row.className = "shop-item" + (item.done?" done":"");
-        const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=item.done;
-        chk.addEventListener("change", ()=>{ item.done = chk.checked; persist(); renderShopping(); renderDashboard(); });
-        const isManual = !item.linkedInventoryId;
-        const txt = document.createElement("div"); txt.className="txt"; txt.textContent = item.text;
-        if(isManual){
-          txt.style.cursor = "pointer";
-          txt.title = "Klicken zum Bearbeiten";
-          txt.addEventListener("click", ()=> openShopEditModal(item));
-        } else {
-          txt.title = "Automatisch aus Beständen erzeugt (Meldebestand)";
-          txt.style.fontStyle = "italic";
-        }
-        const qty = document.createElement("div"); qty.className="qty"; qty.textContent = item.qty + " " + item.unit;
-        row.appendChild(chk); row.appendChild(txt); row.appendChild(qty);
-        if(item.date){
-          const dateEl = document.createElement("div"); dateEl.className="qty"; dateEl.textContent = parse(item.date).toLocaleDateString("de-DE");
-          row.appendChild(dateEl);
-        }
-        if(item.supplier){
-          const supEl = document.createElement("div"); supEl.className="qty"; supEl.textContent = "🚚 "+item.supplier;
-          row.appendChild(supEl);
-        }
-        if(item.person){
-          const tag = document.createElement("div"); tag.className="person-tag"; tag.textContent=item.person;
-          tag.style.background = colorFor(item.person);
-          row.appendChild(tag);
-        }
-        const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-        del.addEventListener("click", ()=>{ data.shopping = data.shopping.filter(i=>i.id!==item.id); persist(); renderShopping(); renderDashboard(); });
-        row.appendChild(del);
-        block.appendChild(row);
+    const groupBy = document.getElementById("shopGroupBy").value;
+    if(groupBy==="supplier"){
+      const NO_SUPPLIER = "Ohne Lieferant";
+      const groups = {};
+      data.shopping.forEach(i=>{
+        const key = i.supplier && i.supplier.trim() ? i.supplier.trim() : NO_SUPPLIER;
+        (groups[key] = groups[key] || []).push(i);
       });
-      body.appendChild(block);
-    });
+      const order = Object.keys(groups).filter(k=>k!==NO_SUPPLIER).sort((a,b)=>a.localeCompare(b,"de"));
+      if(groups[NO_SUPPLIER]) order.push(NO_SUPPLIER);
+      order.forEach(supplier=>{
+        const items = groups[supplier];
+        const block = document.createElement("div"); block.className="shop-cat";
+        const h = document.createElement("h4");
+        h.innerHTML = (supplier===NO_SUPPLIER?"":"🚚 ") + supplier + ` <span class="count">${items.filter(i=>!i.done).length}/${items.length}</span>`;
+        block.appendChild(h);
+        items.forEach(item=> block.appendChild(makeShopRow(item)));
+        body.appendChild(block);
+      });
+    } else {
+      CATS_ORDER.forEach(cat=>{
+        const items = data.shopping.filter(i=>i.category===cat);
+        if(items.length===0) return;
+        const block = document.createElement("div"); block.className="shop-cat";
+        const h = document.createElement("h4");
+        h.innerHTML = cat + ` <span class="count">${items.filter(i=>!i.done).length}/${items.length}</span>`;
+        block.appendChild(h);
+        items.forEach(item=> block.appendChild(makeShopRow(item)));
+        body.appendChild(block);
+      });
+    }
   }
   const open = data.shopping.filter(i=>!i.done).length;
   document.getElementById("shopCountBadge").textContent = open + " offen";
 }
+document.getElementById("shopGroupBy").addEventListener("change", renderShopping);
 
 /* ---- Einkaufsliste: manuelle Einträge bearbeiten (Modal) ---- */
 const shopEditOverlay = document.getElementById("shopEditOverlay");
@@ -6404,7 +6435,7 @@ document.getElementById("btnPrintCurrent").addEventListener("click", ()=>{
   const title = activeTabBtn ? activeTabBtn.textContent.trim() : "Liste";
   const now = new Date();
   document.getElementById("printListHeader").innerHTML =
-    `<h1>🏠 Familien-Dashboard – ${escapeHtml(title)}</h1>` +
+    `<h1>👨‍👩‍👧‍👦 FADA Familien-Dashboard – ${escapeHtml(title)}</h1>` +
     `<div class="report-meta">Erstellt am ${now.toLocaleDateString("de-DE")} um ${now.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})}</div>`;
   window.print();
 });
@@ -6421,7 +6452,7 @@ function generateFullReport(){
   const weekDates = getWeekDates();
   const weekStr = weekDates.map(fmt);
   let html = `<div style="padding:24px;max-width:800px;margin:0 auto;">`;
-  html += `<h1 style="font-size:22px;margin-bottom:2px;">🏠 Familien-Dashboard – Gesamtbericht</h1>`;
+  html += `<h1 style="font-size:22px;margin-bottom:2px;">👨‍👩‍👧‍👦 FADA Familien-Dashboard – Gesamtbericht</h1>`;
   html += `<div class="report-meta" style="margin-bottom:20px;">Erstellt am ${now.toLocaleDateString("de-DE")} um ${now.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})}</div>`;
 
   /* -- Diese Woche -- */
