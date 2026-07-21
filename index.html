@@ -470,6 +470,29 @@ section.view.active{display:block;}
 .bday-row .bday-name{font-weight:700;font-size:14.5px;}
 .bday-row .bday-sub{font-size:12px;color:var(--text-secondary);margin-top:2px;}
 .bday-row .bday-days{font-size:11px;font-weight:700;color:#fff;background:#ec4899;padding:3px 10px;border-radius:10px;flex:none;}
+
+/* Terminliste */
+.tl-filter-panel{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:14px 16px;}
+.tl-filter-row{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;}
+.tl-filter-row:last-child{margin-bottom:0;}
+.tl-filter-row .field{min-width:150px;}
+.tl-filter-col{flex:1;min-width:200px;}
+.tl-filter-col > label{display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;}
+.tl-checkbox-list{display:flex;flex-wrap:wrap;gap:6px;}
+.tl-checkbox-list label{
+  display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:400;
+  background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:5px 12px;cursor:pointer;
+}
+.tl-checkbox-list input{margin:0;}
+.tl-group{margin-bottom:18px;}
+.tl-group h4{font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary);margin:0 0 8px;}
+.tl-row{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--surface);}
+.tl-row .tl-date{font-weight:700;font-size:12.5px;min-width:100px;flex:none;}
+.tl-row .tl-info{flex:1;font-size:13px;}
+.tl-row .tl-sub{font-size:11.5px;color:var(--text-secondary);margin-top:1px;}
+@media print{
+  body:not(.printing-report) .tl-filter-panel{display:none !important;}
+}
 .resource-cat-group{margin-bottom:18px;}
 .resource-cat-group h4{font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary);margin:0 0 8px;display:flex;align-items:center;gap:8px;}
 .resource-cat-group h4 .count{background:var(--bg);border-radius:10px;padding:1px 8px;font-weight:700;font-size:11px;}
@@ -573,7 +596,7 @@ footer.hint a{color:var(--blue);}
       <div style="width:32px;height:32px;border-radius:7px;background:linear-gradient(135deg,var(--blue-dark),var(--blue));display:flex;align-items:center;justify-content:center;font-size:17px;">🏠</div>
       <div style="font-size:19px;font-weight:700;">Familien-Dashboard</div>
     </div>
-    <div id="authStatus" style="font-size:12.5px;color:var(--text-secondary);margin-bottom:18px;">Bitte einloggen oder Konto anlegen.</div>
+    <div id="authStatus" style="font-size:12.5px;color:var(--text-secondary);margin-bottom:18px;">Bitte einloggen.</div>
     <div class="field">
       <label>E-Mail</label>
       <input type="email" id="authEmail" autocomplete="username">
@@ -584,11 +607,10 @@ footer.hint a{color:var(--blue);}
     </div>
     <div id="authError" style="color:var(--error);font-size:12.5px;margin-bottom:10px;display:none;"></div>
     <div style="display:flex;gap:8px;margin-top:6px;">
-      <button class="btn btn-secondary" id="btnSignUp" style="flex:1;">Konto anlegen</button>
       <button class="btn btn-primary" id="btnSignIn" style="flex:1;">Einloggen</button>
     </div>
     <div style="font-size:11px;color:var(--text-secondary);margin-top:16px;">
-      Jedes Familienmitglied kann sich ein eigenes Konto anlegen oder ihr nutzt gemeinsam einen Zugang — alle sehen dieselben Daten.
+      Neue Zugänge werden vom Administrator angelegt. Passwort vergessen? Meldet euch beim Administrator der Familien-App.
     </div>
   </div>
 </div>
@@ -638,6 +660,7 @@ footer.hint a{color:var(--blue);}
     <button class="tab-btn" data-tab="checklists">✅ Checklisten</button>
     <button class="tab-btn" data-tab="whereis">🔎 Wo ist</button>
     <button class="tab-btn" data-tab="birthdaysList">🎂 Geburtstage</button>
+    <button class="tab-btn" data-tab="termineListe">🗒️ Terminliste</button>
     <button class="tab-btn" data-tab="roomBooking">📋 Belegungsplan</button>
   </nav>
 
@@ -1154,6 +1177,47 @@ footer.hint a{color:var(--blue);}
           <button class="btn btn-primary" id="btnAddBirthdayList">+ Geburtstag</button>
         </div>
         <div id="birthdaysListBody"></div>
+      </div>
+    </section>
+
+    <!-- TERMINLISTE (filterbar, druckbar) -->
+    <section class="view" id="view-termineListe">
+      <div class="panel" style="padding:16px;">
+        <div class="tl-filter-panel">
+          <div class="tl-filter-row">
+            <div class="field">
+              <label>Von</label>
+              <input type="date" id="tlFrom">
+            </div>
+            <div class="field">
+              <label>Bis</label>
+              <input type="date" id="tlTo">
+            </div>
+            <div class="field">
+              <label>Gruppieren nach</label>
+              <select id="tlGroupBy">
+                <option value="category">Kategorie</option>
+                <option value="person">Person</option>
+              </select>
+            </div>
+          </div>
+          <div class="tl-filter-row">
+            <div class="tl-filter-col">
+              <label>Kategorien</label>
+              <div id="tlCategoryFilters" class="tl-checkbox-list"></div>
+            </div>
+            <div class="tl-filter-col">
+              <label>Personen</label>
+              <div id="tlPersonFilters" class="tl-checkbox-list"></div>
+            </div>
+          </div>
+          <div class="tl-filter-row" style="justify-content:flex-end;">
+            <button class="btn btn-secondary" id="btnTlAllCategories">Alle Kategorien</button>
+            <button class="btn btn-secondary" id="btnTlAllPersons">Alle Personen</button>
+          </div>
+        </div>
+        <div id="tlResultMeta" style="font-size:12.5px;color:var(--text-secondary);margin:14px 0 10px;"></div>
+        <div id="termineListeBody"></div>
       </div>
     </section>
 
@@ -2397,19 +2461,6 @@ if(SUPABASE_CONFIGURED && supabaseClient){
     if(error){ authErrorMsg(error.message); return; }
     handleAuthSuccess(res.user);
   });
-  document.getElementById("btnSignUp").addEventListener("click", async ()=>{
-    authErrorMsg(null);
-    const email = document.getElementById("authEmail").value.trim();
-    const password = document.getElementById("authPassword").value;
-    if(password.length < 6){ authErrorMsg("Das Passwort muss mindestens 6 Zeichen haben."); return; }
-    const { data: res, error } = await supabaseClient.auth.signUp({ email, password });
-    if(error){ authErrorMsg(error.message); return; }
-    if(res.user && !res.session){
-      document.getElementById("authStatus").textContent = "Konto angelegt — bitte bestätige die E-Mail und logge dich danach ein.";
-    } else if(res.user){
-      handleAuthSuccess(res.user);
-    }
-  });
   document.getElementById("btnSignOut").addEventListener("click", async ()=>{
     await supabaseClient.auth.signOut();
     currentUser = null;
@@ -3088,6 +3139,160 @@ function renderBirthdaysList(){
     row.appendChild(dateEl); row.appendChild(info); row.appendChild(daysBadge);
     row.addEventListener("click", ()=> openBirthdayModal(b));
     box.appendChild(row);
+  });
+}
+
+/* ============ TERMINLISTE (filterbar, druckbar) ============ */
+const TL_BIRTHDAY_CAT = "Geburtstage";
+let tlSelectedCategories = null; // null = noch nicht initialisiert -> beim ersten Rendern alle auswählen
+let tlSelectedPersons = null;
+
+function tlGetAllCategories(){
+  const cats = new Set();
+  data.events.forEach(ev=>{ if(ev.category && ev.category.trim()) cats.add(ev.category.trim()); });
+  const list = Array.from(cats).sort((a,b)=>a.localeCompare(b,"de"));
+  const hasCategoryless = data.events.some(ev=> !ev.category || !ev.category.trim());
+  if(hasCategoryless) list.push("Ohne Kategorie");
+  list.push(TL_BIRTHDAY_CAT);
+  return list;
+}
+function tlGetAllPersons(){
+  const persons = new Set();
+  data.events.forEach(ev=>{ if(ev.person && ev.person.trim()) persons.add(ev.person.trim()); });
+  data.birthdays.forEach(b=>{ if(b.name && b.name.trim()) persons.add(b.name.trim()); });
+  const list = Array.from(persons).sort((a,b)=>a.localeCompare(b,"de"));
+  const hasPersonless = data.events.some(ev=> !ev.person || !ev.person.trim());
+  if(hasPersonless) list.push("Ohne Person");
+  return list;
+}
+
+function renderTlFilters(){
+  const allCats = tlGetAllCategories();
+  const allPersons = tlGetAllPersons();
+  if(tlSelectedCategories===null) tlSelectedCategories = new Set(allCats);
+  if(tlSelectedPersons===null) tlSelectedPersons = new Set(allPersons);
+
+  const catBox = document.getElementById("tlCategoryFilters");
+  catBox.innerHTML = allCats.map(cat=>`
+    <label><input type="checkbox" class="tlCatCheck" value="${escapeHtml(cat)}" ${tlSelectedCategories.has(cat)?"checked":""}>${escapeHtml(cat)}</label>
+  `).join("");
+  catBox.querySelectorAll(".tlCatCheck").forEach(cb=> cb.addEventListener("change", ()=>{
+    if(cb.checked) tlSelectedCategories.add(cb.value); else tlSelectedCategories.delete(cb.value);
+    renderTermineListe();
+  }));
+
+  const personBox = document.getElementById("tlPersonFilters");
+  personBox.innerHTML = allPersons.length ? allPersons.map(p=>`
+    <label><input type="checkbox" class="tlPersonCheck" value="${escapeHtml(p)}" ${tlSelectedPersons.has(p)?"checked":""}>${escapeHtml(p)}</label>
+  `).join("") : '<span style="font-size:12px;color:var(--text-secondary);">Keine Personen hinterlegt.</span>';
+  personBox.querySelectorAll(".tlPersonCheck").forEach(cb=> cb.addEventListener("change", ()=>{
+    if(cb.checked) tlSelectedPersons.add(cb.value); else tlSelectedPersons.delete(cb.value);
+    renderTermineListe();
+  }));
+}
+
+document.getElementById("btnTlAllCategories").addEventListener("click", ()=>{
+  tlSelectedCategories = new Set(tlGetAllCategories());
+  renderTlFilters();
+  renderTermineListe();
+});
+document.getElementById("btnTlAllPersons").addEventListener("click", ()=>{
+  tlSelectedPersons = new Set(tlGetAllPersons());
+  renderTlFilters();
+  renderTermineListe();
+});
+document.getElementById("tlFrom").addEventListener("change", renderTermineListe);
+document.getElementById("tlTo").addEventListener("change", renderTermineListe);
+document.getElementById("tlGroupBy").addEventListener("change", renderTermineListe);
+
+function tlEnsureDefaultRange(){
+  if(!document.getElementById("tlFrom").value){
+    document.getElementById("tlFrom").value = todayStr();
+  }
+  if(!document.getElementById("tlTo").value){
+    const d = new Date(); d.setMonth(d.getMonth()+3);
+    document.getElementById("tlTo").value = fmt(d);
+  }
+}
+
+function renderTermineListe(){
+  tlEnsureDefaultRange();
+  renderTlFilters();
+  const fromStr = document.getElementById("tlFrom").value;
+  const toStr = document.getElementById("tlTo").value;
+  const groupBy = document.getElementById("tlGroupBy").value;
+  const box = document.getElementById("termineListeBody");
+  box.innerHTML = "";
+  document.getElementById("tlResultMeta").textContent = "";
+
+  if(!fromStr || !toStr || fromStr > toStr){
+    box.innerHTML = '<div class="shop-empty">Bitte einen gültigen Zeitraum wählen (Von darf nicht nach Bis liegen).</div>';
+    return;
+  }
+
+  // Alle Tage im gewählten Zeitraum durchgehen und passende Termine/Geburtstage einsammeln.
+  const items = []; // {date, title, sub, category}
+  let d = parse(fromStr);
+  const end = parse(toStr);
+  let dayCount = 0;
+  while(d <= end && dayCount < 3660){ // Sicherheitsgrenze: max. ca. 10 Jahre
+    const ds = fmt(d);
+    if(tlSelectedCategories.has(TL_BIRTHDAY_CAT)){
+      data.birthdays.forEach(b=>{
+        const bd = parse(b.date);
+        if(bd.getMonth()!==d.getMonth() || bd.getDate()!==d.getDate()) return;
+        const person = b.name && b.name.trim() ? b.name.trim() : "Ohne Person";
+        if(!tlSelectedPersons.has(person)) return;
+        const age = d.getFullYear() - bd.getFullYear();
+        items.push({ date: ds, title: "🎂 " + b.name + (age>=0 ? ` (${age})` : ""), sub: b.notes||"", category: TL_BIRTHDAY_CAT, person });
+      });
+    }
+    data.events.forEach(ev=>{
+      if(!isEventOnDate(ev, ds)) return;
+      const cat = (ev.category && ev.category.trim()) ? ev.category.trim() : "Ohne Kategorie";
+      const person = (ev.person && ev.person.trim()) ? ev.person.trim() : "Ohne Person";
+      if(!tlSelectedCategories.has(cat)) return;
+      if(!tlSelectedPersons.has(person)) return;
+      items.push({
+        date: ds,
+        title: (ev.recurrence ? "🔁 " : "") + ev.title,
+        sub: [ev.time, ev.location?"📍"+ev.location:null].filter(Boolean).join(" · "),
+        category: cat,
+        person: person
+      });
+    });
+    d = new Date(d.getFullYear(), d.getMonth(), d.getDate()+1);
+    dayCount++;
+  }
+
+  document.getElementById("tlResultMeta").textContent =
+    items.length + " Termin(e) im Zeitraum " + parse(fromStr).toLocaleDateString("de-DE") + " – " + parse(toStr).toLocaleDateString("de-DE");
+
+  if(items.length===0){
+    box.innerHTML = '<div class="shop-empty">Keine Termine für die gewählten Filter und den Zeitraum gefunden.</div>';
+    return;
+  }
+
+  const groups = {};
+  items.forEach(it=>{
+    const key = groupBy==="person" ? it.person : it.category;
+    (groups[key] = groups[key] || []).push(it);
+  });
+  Object.keys(groups).sort((a,b)=>a.localeCompare(b,"de")).forEach(key=>{
+    const block = document.createElement("div"); block.className = "tl-group";
+    const h = document.createElement("h4"); h.textContent = `${key} (${groups[key].length})`;
+    block.appendChild(h);
+    groups[key].sort((a,b)=> a.date.localeCompare(b.date)).forEach(it=>{
+      const row = document.createElement("div"); row.className = "tl-row";
+      const dateEl = document.createElement("div"); dateEl.className = "tl-date";
+      dateEl.textContent = parse(it.date).toLocaleDateString("de-DE",{weekday:"short", day:"2-digit", month:"2-digit", year:"numeric"});
+      const info = document.createElement("div"); info.className = "tl-info";
+      info.innerHTML = escapeHtml(it.title) + (groupBy==="person" ? ` <span style="color:var(--text-secondary);">· ${escapeHtml(it.category)}</span>` : ` <span style="color:var(--text-secondary);">· ${escapeHtml(it.person)}</span>`);
+      if(it.sub){ const s = document.createElement("div"); s.className = "tl-sub"; s.textContent = it.sub; info.appendChild(s); }
+      row.appendChild(dateEl); row.appendChild(info);
+      block.appendChild(row);
+    });
+    box.appendChild(block);
   });
 }
 
@@ -5680,7 +5885,7 @@ function renderDashboard(){
     ));
   });
 
-  /* -- Einkaufsliste: Artikel mit Datum in dieser Woche oder mit vergangenem Datum, nach Kategorie -- */
+  /* -- Einkaufsliste: Artikel mit Datum in dieser Woche oder mit vergangenem Datum, nach Lieferant -- */
   const shopBox = document.getElementById("dashShopping");
   shopBox.innerHTML = "";
   const todayD = todayStr();
@@ -5689,21 +5894,25 @@ function renderDashboard(){
   if(weekShopping.length===0){
     shopBox.appendChild(dashEmpty("Keine terminierten Einkäufe diese Woche oder überfällig."));
   } else {
+    const NO_SUPPLIER = "Ohne Lieferant";
     const shopGroups = {};
-    weekShopping.forEach(item=>{ (shopGroups[item.category] = shopGroups[item.category] || []).push(item); });
-    const shopOrder = CATS_ORDER.filter(c=>shopGroups[c]);
-    Object.keys(shopGroups).forEach(k=>{ if(!shopOrder.includes(k)) shopOrder.push(k); });
-    shopOrder.forEach(cat=>{
+    weekShopping.forEach(item=>{
+      const key = item.supplier && item.supplier.trim() ? item.supplier.trim() : NO_SUPPLIER;
+      (shopGroups[key] = shopGroups[key] || []).push(item);
+    });
+    const shopOrder = Object.keys(shopGroups).filter(k=>k!==NO_SUPPLIER).sort((a,b)=>a.localeCompare(b,"de"));
+    if(shopGroups[NO_SUPPLIER]) shopOrder.push(NO_SUPPLIER);
+    shopOrder.forEach(supplier=>{
       const heading = document.createElement("div"); heading.className = "dash-day-heading";
-      heading.textContent = cat;
+      heading.textContent = (supplier===NO_SUPPLIER ? "" : "🚚 ") + supplier;
       shopBox.appendChild(heading);
-      shopGroups[cat].sort((a,b)=> a.date.localeCompare(b.date)).forEach(item=>{
+      shopGroups[supplier].sort((a,b)=> a.date.localeCompare(b.date)).forEach(item=>{
         const overdue = item.date < todayD;
         const dLabel = parse(item.date).toLocaleDateString("de-DE",{weekday:"short", day:"2-digit", month:"2-digit"});
         shopBox.appendChild(dashRow(
           urgencyColor(item.date, false),
           item.text,
-          (overdue ? "überfällig · " : "") + dLabel + (item.person? " · "+item.person : "") + (item.supplier? " · 🚚 "+item.supplier : ""),
+          (overdue ? "überfällig · " : "") + dLabel + (item.person? " · "+item.person : "") + (item.category? " · "+item.category : ""),
           item.qty + " " + item.unit,
           ()=>{ document.querySelector('.tab-btn[data-tab="shopping"]').click(); },
           item
@@ -6387,6 +6596,7 @@ function renderAll(){
   renderResourceList();
   renderRoomBookings();
   renderBirthdaysList();
+  renderTermineListe();
   populateAllContactLinkSelects();
   renderDashboard();
 }
