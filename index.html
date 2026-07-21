@@ -686,6 +686,16 @@ footer.hint a{color:var(--blue);}
             <div class="dash-list" id="dashPayments"></div>
           </div>
         </div>
+        <div class="dash-card" data-card-id="vouchers">
+          <div class="dash-card-header">
+            <span class="dash-drag-handle" title="Verschieben">⠿</span>
+            <h3>🎁 Gutscheine <span class="count-badge" id="dashVouchersCount">0</span></h3>
+            <button class="dash-collapse-btn" title="Ein-/Ausklappen">▾</button>
+          </div>
+          <div class="dash-card-body">
+            <div class="dash-list" id="dashVouchers"></div>
+          </div>
+        </div>
         <div class="dash-card" data-card-id="shopping">
           <div class="dash-card-header">
             <span class="dash-drag-handle" title="Verschieben">⠿</span>
@@ -2258,18 +2268,24 @@ function setSyncStatus(state){
 async function loadAllFromSupabase(){
   if(!supabaseClient) return;
   setSyncStatus("syncing");
+  let hadError = false;
   try{
     for(const [localKey, tableName] of Object.entries(SUPABASE_TABLE_MAP)){
-      const { data: rows, error } = await supabaseClient.from(tableName).select("payload");
-      if(error){ console.warn("Laden fehlgeschlagen:", tableName, error.message); continue; }
-      data[localKey] = (rows||[]).map(r=>r.payload);
+      try{
+        const { data: rows, error } = await supabaseClient.from(tableName).select("payload");
+        if(error){ console.warn("Laden fehlgeschlagen:", tableName, error.message); hadError = true; continue; }
+        data[localKey] = (rows||[]).map(r=>r.payload);
+      }catch(tableErr){
+        console.warn("Laden für Tabelle fehlgeschlagen, mache mit den übrigen weiter:", tableName, tableErr);
+        hadError = true;
+      }
     }
     const { data: settingsRow } = await supabaseClient.from("app_settings").select("payload").eq("id", true).single();
     if(settingsRow && settingsRow.payload){
       if(settingsRow.payload.dashboardSettings) data.dashboardSettings = settingsRow.payload.dashboardSettings;
       if(settingsRow.payload.currency) data.currency = settingsRow.payload.currency;
     }
-    setSyncStatus("idle");
+    setSyncStatus(hadError ? "error" : "idle");
   }catch(e){
     console.warn("Cloud-Laden fehlgeschlagen", e);
     setSyncStatus("error");
@@ -2285,21 +2301,43 @@ async function syncAllToSupabase(){
   let hadError = false;
   try{
     for(const [localKey, tableName] of Object.entries(SUPABASE_TABLE_MAP)){
-      const items = data[localKey] || [];
-      const rows = items.filter(it=>it && it.id).map(it=> ({ id: it.id, payload: it }));
-      if(rows.length){
-        const { error } = await supabaseClient.from(tableName).upsert(rows);
-        if(error){ console.warn("Sync fehlgeschlagen:", tableName, error.message); hadError = true; }
+      // Jede Tabelle einzeln absichern: ein Fehler bei einer Tabelle (z.B. events nach einem
+      // großen iCal-Import) darf die Synchronisierung der übrigen Tabellen nicht verhindern.
+      try{
+        const items = data[localKey] || [];
+        const rows = items.filter(it=>it && it.id).map(it=> ({ id: it.id, payload: it }));
+        if(rows.length){
+          const { error } = await supabaseClient.from(tableName).upsert(rows);
+          if(error){ console.warn("Sync fehlgeschlagen:", tableName, error.message); hadError = true; }
+        }
+
+        // Aufräumen: nur wirklich zu löschende Zeilen ermitteln (statt einer langen "behalten"-Liste
+        // in der URL, was bei vielen Einträgen zu einer zu langen Anfrage-URL führen konnte).
+        const { data: existingRows, error: fetchError } = await supabaseClient.from(tableName).select("id");
+        if(fetchError){
+          console.warn("Aufräumen: Bestand konnte nicht geladen werden:", tableName, fetchError.message);
+          hadError = true;
+        } else {
+          const keepIds = new Set(rows.map(r=>r.id));
+          const idsToDelete = (existingRows||[]).map(r=>r.id).filter(id=>!keepIds.has(id));
+          if(idsToDelete.length){
+            const { error: delError } = await supabaseClient.from(tableName).delete().in("id", idsToDelete);
+            if(delError){ console.warn("Aufräumen fehlgeschlagen:", tableName, delError.message); hadError = true; }
+          }
+        }
+      }catch(tableErr){
+        console.warn("Sync für Tabelle fehlgeschlagen, mache mit den übrigen weiter:", tableName, tableErr);
+        hadError = true;
       }
-      const keepIds = rows.map(r=>r.id);
-      let delQuery = supabaseClient.from(tableName).delete();
-      delQuery = keepIds.length ? delQuery.not("id", "in", `(${keepIds.join(",")})`) : delQuery.gte("created_at", "1900-01-01");
-      const { error: delError } = await delQuery;
-      if(delError){ console.warn("Aufräumen fehlgeschlagen:", tableName, delError.message); hadError = true; }
     }
-    await supabaseClient.from("app_settings").update({
-      payload: { dashboardSettings: data.dashboardSettings, currency: data.currency }
-    }).eq("id", true);
+    try{
+      await supabaseClient.from("app_settings").update({
+        payload: { dashboardSettings: data.dashboardSettings, currency: data.currency }
+      }).eq("id", true);
+    }catch(settingsErr){
+      console.warn("Einstellungen konnten nicht synchronisiert werden", settingsErr);
+      hadError = true;
+    }
     setSyncStatus(hadError ? "error" : "idle");
   }catch(e){
     console.warn("Cloud-Sync fehlgeschlagen", e);
@@ -5620,6 +5658,25 @@ function renderDashboard(){
       eur(p.amount),
       ()=>{ document.querySelector('.tab-btn[data-tab="payments"]').click(); },
       p
+    ));
+  });
+
+  /* -- Gutscheine: diese Woche ablaufend oder bereits abgelaufen -- */
+  const voucherBox = document.getElementById("dashVouchers");
+  voucherBox.innerHTML = "";
+  const relevantVouchers = data.vouchers.filter(v=> !v.redeemed && v.expiryDate && (weekStr.includes(v.expiryDate) || v.expiryDate < todayStr()))
+    .sort((a,b)=> (a.expiryDate||"").localeCompare(b.expiryDate||""));
+  document.getElementById("dashVouchersCount").textContent = relevantVouchers.length;
+  if(relevantVouchers.length===0){ voucherBox.appendChild(dashEmpty("Keine Gutscheine laufen diese Woche ab.")); }
+  else relevantVouchers.forEach(v=>{
+    const dLabel = parse(v.expiryDate).toLocaleDateString("de-DE",{weekday:"short", day:"2-digit", month:"2-digit"});
+    const overdue = v.expiryDate < todayStr();
+    voucherBox.appendChild(dashRow(
+      urgencyColor(v.expiryDate, v.redeemed),
+      v.text,
+      (overdue ? "abgelaufen · " : "gültig bis ") + dLabel,
+      eur(v.amount),
+      ()=>{ document.querySelector('.tab-btn[data-tab="vouchers"]').click(); }
     ));
   });
 
