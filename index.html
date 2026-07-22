@@ -1554,6 +1554,10 @@ footer.hint a{color:var(--blue);}
       <label>Kontakt verknüpfen (optional)</label>
       <select id="assetContactLink"><option value="">Kein Kontakt</option></select>
     </div>
+    <div class="field">
+      <label>Anhang (optional)</label>
+      <div id="assetAttachment"></div>
+    </div>
     <div class="modal-actions">
       <div class="left">
         <button class="btn btn-danger" id="btnDeleteAsset" style="display:none;">Löschen</button>
@@ -1793,6 +1797,10 @@ footer.hint a{color:var(--blue);}
       <label>Person (optional)</label>
       <input type="text" id="payEditPerson">
     </div>
+    <div class="field">
+      <label>Anhang (optional)</label>
+      <div id="payEditAttachment"></div>
+    </div>
     <div class="modal-actions">
       <div class="left">
         <button class="btn btn-danger" id="btnDeletePaymentEdit">Löschen</button>
@@ -1962,6 +1970,84 @@ footer.hint a{color:var(--blue);}
   </div>
 </div>
 
+<!-- Incoming Payment Edit Modal -->
+<div class="overlay" id="incomingPaymentEditOverlay">
+  <div class="modal">
+    <h3>Zahlungseingang bearbeiten</h3>
+    <input type="hidden" id="incPayEditId">
+    <div class="field">
+      <label>Bezeichnung</label>
+      <input type="text" id="incPayEditText">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Betrag</label>
+        <input type="number" id="incPayEditAmount" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label>Erwartet am</label>
+        <input type="date" id="incPayEditDue">
+      </div>
+    </div>
+    <div class="field">
+      <label>Person (optional)</label>
+      <input type="text" id="incPayEditPerson">
+    </div>
+    <div class="field">
+      <label>Anhang (optional)</label>
+      <div id="incPayEditAttachment"></div>
+    </div>
+    <div class="modal-actions">
+      <div class="left">
+        <button class="btn btn-danger" id="btnDeleteIncomingPaymentEdit">Löschen</button>
+      </div>
+      <div class="left">
+        <button class="btn btn-secondary" id="btnCancelIncomingPaymentEdit">Abbrechen</button>
+        <button class="btn btn-primary" id="btnSaveIncomingPaymentEdit">Speichern</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Voucher Edit Modal -->
+<div class="overlay" id="voucherEditOverlay">
+  <div class="modal">
+    <h3>Gutschein bearbeiten</h3>
+    <input type="hidden" id="voucherEditId">
+    <div class="field">
+      <label>Bezeichnung</label>
+      <input type="text" id="voucherEditText">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Wert</label>
+        <input type="number" id="voucherEditAmount" min="0" step="0.01">
+      </div>
+      <div class="field">
+        <label>Gültig bis (optional)</label>
+        <input type="date" id="voucherEditExpiry">
+      </div>
+    </div>
+    <div class="field">
+      <label>Person (optional)</label>
+      <input type="text" id="voucherEditPerson">
+    </div>
+    <div class="field">
+      <label>Anhang (optional)</label>
+      <div id="voucherEditAttachment"></div>
+    </div>
+    <div class="modal-actions">
+      <div class="left">
+        <button class="btn btn-danger" id="btnDeleteVoucherEdit">Löschen</button>
+      </div>
+      <div class="left">
+        <button class="btn btn-secondary" id="btnCancelVoucherEdit">Abbrechen</button>
+        <button class="btn btn-primary" id="btnSaveVoucherEdit">Speichern</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Whereis Edit Modal -->
 <div class="overlay" id="whereisEditOverlay">
   <div class="modal">
@@ -1992,6 +2078,10 @@ footer.hint a{color:var(--blue);}
     <div class="field">
       <label>Notiz (optional)</label>
       <textarea id="whereEditNotes"></textarea>
+    </div>
+    <div class="field">
+      <label>Anhang (optional)</label>
+      <div id="whereEditAttachment"></div>
     </div>
     <div class="modal-actions">
       <div class="left">
@@ -2329,6 +2419,10 @@ footer.hint a{color:var(--blue);}
       <label>Kontakt verknüpfen (optional)</label>
       <select id="contractContactLink"><option value="">Kein Kontakt</option></select>
     </div>
+    <div class="field">
+      <label>Anhang (optional)</label>
+      <div id="contractAttachment"></div>
+    </div>
     <div class="field" style="display:flex;align-items:center;gap:8px;">
       <input type="checkbox" id="contractCancelIntent" style="width:18px;height:18px;accent-color:var(--error);">
       <label style="margin:0;font-weight:600;color:var(--text);" for="contractCancelIntent">🚩 Kündigung ist beabsichtigt</label>
@@ -2643,6 +2737,82 @@ async function handleAuthSuccess(user){
 
 // Anzeigename für den Familienchat: kommt vom Login-Konto (dort dauerhaft hinterlegt),
 // mit Fallback auf den Browser fürs rein lokale Nutzen ohne Supabase.
+/* ============ ANHÄNGE (Supabase Storage) ============ */
+const ATTACHMENTS_BUCKET = "attachments";
+
+async function uploadAttachment(table, recordId, file){
+  if(!supabaseClient) throw new Error("Cloud nicht eingerichtet");
+  const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+  const path = `${table}/${recordId}/${Date.now()}_${safeName}`;
+  const { error } = await supabaseClient.storage.from(ATTACHMENTS_BUCKET).upload(path, file, { upsert: true });
+  if(error) throw error;
+  return path;
+}
+async function getAttachmentUrl(path){
+  const { data, error } = await supabaseClient.storage.from(ATTACHMENTS_BUCKET).createSignedUrl(path, 3600);
+  if(error){ console.warn("Anhang-Link konnte nicht erzeugt werden", error.message); return null; }
+  return data.signedUrl;
+}
+async function deleteAttachment(path){
+  if(!path) return;
+  try{ await supabaseClient.storage.from(ATTACHMENTS_BUCKET).remove([path]); }
+  catch(e){ console.warn("Anhang konnte nicht gelöscht werden", e); }
+}
+
+// Baut das Anhang-Feld (aktueller Anhang + Öffnen/Entfernen, oder Hochladen-Button) in einen
+// beliebigen Container. item.attachmentPath (falls vorhanden) verweist auf die Datei im Storage.
+// item.id muss bereits existieren (Datensatz muss vorher gespeichert sein).
+async function renderAttachmentField(containerId, item, table, onChange){
+  const box = document.getElementById(containerId);
+  if(!box) return;
+  if(!SUPABASE_CONFIGURED){
+    box.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">PDF-Anhänge benötigen die Cloud-Anbindung (Supabase).</div>';
+    return;
+  }
+  if(item.attachmentPath){
+    box.innerHTML = '<div style="font-size:13px;color:var(--text-secondary);">Lade Anhang …</div>';
+    const url = await getAttachmentUrl(item.attachmentPath);
+    const fileName = item.attachmentPath.split("/").pop().replace(/^\d+_/, "");
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;">
+        <span style="font-size:18px;">📎</span>
+        <span style="flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(fileName)}</span>
+        ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="font-size:12px;font-weight:700;color:var(--blue);">Öffnen</a>` : ""}
+        <button type="button" class="btn-icon" id="${containerId}RemoveBtn" title="Anhang entfernen">✕</button>
+      </div>`;
+    document.getElementById(containerId+"RemoveBtn").addEventListener("click", async ()=>{
+      await deleteAttachment(item.attachmentPath);
+      item.attachmentPath = null;
+      if(onChange) onChange();
+      renderAttachmentField(containerId, item, table, onChange);
+    });
+  } else {
+    box.innerHTML = `
+      <input type="file" id="${containerId}Input" accept="application/pdf" style="display:none;">
+      <button type="button" class="btn btn-secondary" id="${containerId}Btn">📎 PDF hochladen</button>
+      <span id="${containerId}Status" style="font-size:12px;color:var(--text-secondary);margin-left:8px;"></span>`;
+    const fileInput = document.getElementById(containerId+"Input");
+    document.getElementById(containerId+"Btn").addEventListener("click", ()=> fileInput.click());
+    fileInput.addEventListener("change", async ()=>{
+      const file = fileInput.files[0];
+      if(!file) return;
+      if(!item.id){ alert("Bitte den Eintrag zuerst speichern, dann kann eine PDF angehängt werden."); return; }
+      const statusEl = document.getElementById(containerId+"Status");
+      statusEl.textContent = "Wird hochgeladen …";
+      try{
+        const path = await uploadAttachment(table, item.id, file);
+        item.attachmentPath = path;
+        if(onChange) onChange();
+        renderAttachmentField(containerId, item, table, onChange);
+      }catch(e){
+        console.warn("Upload fehlgeschlagen", e);
+        statusEl.textContent = "Fehlgeschlagen: " + (e.message||e);
+      }
+    });
+  }
+}
+
+
 function getChatSenderName(){
   if(currentUser && currentUser.user_metadata && currentUser.user_metadata.display_name){
     return currentUser.user_metadata.display_name;
@@ -4322,6 +4492,7 @@ function openPaymentEditModal(p){
   document.getElementById("payEditAmount").value = p.amount;
   document.getElementById("payEditDue").value = p.dueDate;
   document.getElementById("payEditPerson").value = p.person || "";
+  renderAttachmentField("payEditAttachment", p, "payments", ()=> persist({table:"payments", op:"upsert", item:p}));
   paymentEditOverlay.classList.add("open");
 }
 document.getElementById("btnCancelPaymentEdit").addEventListener("click", ()=> paymentEditOverlay.classList.remove("open"));
@@ -4401,6 +4572,9 @@ function renderIncomingPayments(){
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=p.done;
       chk.addEventListener("change", ()=>{ p.done = chk.checked; persist({table:"incomingPayments", op:"upsert", item:p}); renderIncomingPayments(); renderDashboard(); });
       const txt = document.createElement("div"); txt.className="txt"; txt.textContent = p.text;
+      txt.style.cursor = "pointer";
+      txt.title = "Klicken zum Bearbeiten";
+      txt.addEventListener("click", ()=> openIncomingPaymentEditModal(p));
       const dueEl = document.createElement("div");
       dueEl.className = "due" + (overdue?" overdue-text":"") + (soon?" soon-text":"");
       dueEl.textContent = "erwartet " + due.toLocaleDateString("de-DE") + (overdue ? " · überfällig" : soon ? ` · in ${daysLeft} Tg.` : "");
@@ -4429,6 +4603,45 @@ document.getElementById("btnClearDoneIncomingPayments").addEventListener("click"
   const removedIds = data.incomingPayments.filter(p=>p.done).map(p=>p.id);
   data.incomingPayments = data.incomingPayments.filter(p=>!p.done);
   persist({table:"incomingPayments", op:"deleteMany", ids:removedIds});
+  renderIncomingPayments();
+  renderDashboard();
+});
+
+/* ---- Zahlungseingänge: bearbeiten (Modal) ---- */
+const incomingPaymentEditOverlay = document.getElementById("incomingPaymentEditOverlay");
+function openIncomingPaymentEditModal(p){
+  document.getElementById("incPayEditId").value = p.id;
+  document.getElementById("incPayEditText").value = p.text;
+  document.getElementById("incPayEditAmount").value = p.amount;
+  document.getElementById("incPayEditDue").value = p.dueDate;
+  document.getElementById("incPayEditPerson").value = p.person || "";
+  renderAttachmentField("incPayEditAttachment", p, "incomingPayments", ()=> persist({table:"incomingPayments", op:"upsert", item:p}));
+  incomingPaymentEditOverlay.classList.add("open");
+}
+document.getElementById("btnCancelIncomingPaymentEdit").addEventListener("click", ()=> incomingPaymentEditOverlay.classList.remove("open"));
+incomingPaymentEditOverlay.addEventListener("click",(e)=>{ if(e.target===incomingPaymentEditOverlay) incomingPaymentEditOverlay.classList.remove("open"); });
+
+document.getElementById("btnSaveIncomingPaymentEdit").addEventListener("click", ()=>{
+  const text = document.getElementById("incPayEditText").value.trim();
+  const dueDate = document.getElementById("incPayEditDue").value;
+  if(!text || !dueDate){ alert("Bitte Bezeichnung und Fälligkeit angeben."); return; }
+  const id = document.getElementById("incPayEditId").value;
+  const p = data.incomingPayments.find(x=>x.id===id);
+  if(!p) return;
+  p.text = text;
+  p.amount = Number(document.getElementById("incPayEditAmount").value) || 0;
+  p.dueDate = dueDate;
+  p.person = document.getElementById("incPayEditPerson").value.trim();
+  persist({table:"incomingPayments", op:"upsert", item:p});
+  incomingPaymentEditOverlay.classList.remove("open");
+  renderIncomingPayments();
+  renderDashboard();
+});
+document.getElementById("btnDeleteIncomingPaymentEdit").addEventListener("click", ()=>{
+  const id = document.getElementById("incPayEditId").value;
+  data.incomingPayments = data.incomingPayments.filter(x=>x.id!==id);
+  persist({table:"incomingPayments", op:"delete", id});
+  incomingPaymentEditOverlay.classList.remove("open");
   renderIncomingPayments();
   renderDashboard();
 });
@@ -4481,6 +4694,9 @@ function renderVouchers(){
       chk.title = "Als eingelöst markieren";
       chk.addEventListener("change", ()=>{ v.redeemed = chk.checked; persist({table:"vouchers", op:"upsert", item:v}); renderVouchers(); });
       const txt = document.createElement("div"); txt.className="txt"; txt.textContent = v.text;
+      txt.style.cursor = "pointer";
+      txt.title = "Klicken zum Bearbeiten";
+      txt.addEventListener("click", ()=> openVoucherEditModal(v));
       const dueEl = document.createElement("div");
       dueEl.className = "due" + (overdue?" overdue-text":"") + (soon?" soon-text":"");
       dueEl.textContent = expiry
@@ -4511,6 +4727,42 @@ document.getElementById("btnClearRedeemedVouchers").addEventListener("click", ()
   const removedIds = data.vouchers.filter(v=>v.redeemed).map(v=>v.id);
   data.vouchers = data.vouchers.filter(v=>!v.redeemed);
   persist({table:"vouchers", op:"deleteMany", ids:removedIds});
+  renderVouchers();
+});
+
+/* ---- Gutscheine: bearbeiten (Modal) ---- */
+const voucherEditOverlay = document.getElementById("voucherEditOverlay");
+function openVoucherEditModal(v){
+  document.getElementById("voucherEditId").value = v.id;
+  document.getElementById("voucherEditText").value = v.text;
+  document.getElementById("voucherEditAmount").value = v.amount;
+  document.getElementById("voucherEditExpiry").value = v.expiryDate || "";
+  document.getElementById("voucherEditPerson").value = v.person || "";
+  renderAttachmentField("voucherEditAttachment", v, "vouchers", ()=> persist({table:"vouchers", op:"upsert", item:v}));
+  voucherEditOverlay.classList.add("open");
+}
+document.getElementById("btnCancelVoucherEdit").addEventListener("click", ()=> voucherEditOverlay.classList.remove("open"));
+voucherEditOverlay.addEventListener("click",(e)=>{ if(e.target===voucherEditOverlay) voucherEditOverlay.classList.remove("open"); });
+
+document.getElementById("btnSaveVoucherEdit").addEventListener("click", ()=>{
+  const text = document.getElementById("voucherEditText").value.trim();
+  if(!text){ alert("Bitte eine Bezeichnung angeben."); return; }
+  const id = document.getElementById("voucherEditId").value;
+  const v = data.vouchers.find(x=>x.id===id);
+  if(!v) return;
+  v.text = text;
+  v.amount = Number(document.getElementById("voucherEditAmount").value) || 0;
+  v.expiryDate = document.getElementById("voucherEditExpiry").value || null;
+  v.person = document.getElementById("voucherEditPerson").value.trim();
+  persist({table:"vouchers", op:"upsert", item:v});
+  voucherEditOverlay.classList.remove("open");
+  renderVouchers();
+});
+document.getElementById("btnDeleteVoucherEdit").addEventListener("click", ()=>{
+  const id = document.getElementById("voucherEditId").value;
+  data.vouchers = data.vouchers.filter(x=>x.id!==id);
+  persist({table:"vouchers", op:"delete", id});
+  voucherEditOverlay.classList.remove("open");
   renderVouchers();
 });
 
@@ -4813,6 +5065,7 @@ function openWhereisEditModal(w){
   document.getElementById("whereEditLink").value = w.link || "";
   document.getElementById("whereEditAssetLink").value = w.assetId || "";
   document.getElementById("whereEditNotes").value = w.notes || "";
+  renderAttachmentField("whereEditAttachment", w, "whereis", ()=> persist({table:"whereis", op:"upsert", item:w}));
   whereisEditOverlay.classList.add("open");
 }
 document.getElementById("btnCancelWhereisEdit").addEventListener("click", ()=> whereisEditOverlay.classList.remove("open"));
@@ -5796,6 +6049,9 @@ function openContractModal(c){
   document.getElementById("contractCancelIntent").checked = c ? !!c.cancelIntent : false;
   populateContactSelectById("contractContactLink");
   document.getElementById("contractContactLink").value = c ? (c.contactId||"") : "";
+  const contractAttBox = document.getElementById("contractAttachment");
+  if(c){ renderAttachmentField("contractAttachment", c, "contracts", ()=> persist({table:"contracts", op:"upsert", item:c})); }
+  else { contractAttBox.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">Erst speichern, danach kann ein Anhang hinzugefügt werden.</div>'; }
   document.getElementById("btnDeleteContract").style.display = c ? "inline-flex" : "none";
   contractOverlay.classList.add("open");
 }
@@ -5884,6 +6140,9 @@ function openAssetModal(a){
   document.getElementById("assetNotes").value = a ? (a.notes||"") : "";
   populateContactSelectById("assetContactLink");
   document.getElementById("assetContactLink").value = a ? (a.contactId||"") : "";
+  const assetAttBox = document.getElementById("assetAttachment");
+  if(a){ renderAttachmentField("assetAttachment", a, "assets", ()=> persist({table:"assets", op:"upsert", item:a})); }
+  else { assetAttBox.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">Erst speichern, danach kann ein Anhang hinzugefügt werden.</div>'; }
   const isFinance = a ? a.assetType==="finanzanlage" : false;
   document.getElementById("assetSachwertFields").style.display = isFinance ? "none" : "block";
   document.getElementById("assetFinanzFields").style.display = isFinance ? "block" : "none";
