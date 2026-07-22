@@ -492,6 +492,19 @@ section.view.active{display:block;}
 .tl-row .tl-date{font-weight:700;font-size:12.5px;min-width:100px;flex:none;}
 .tl-row .tl-info{flex:1;font-size:13px;}
 .tl-row .tl-sub{font-size:11.5px;color:var(--text-secondary);margin-top:1px;}
+
+/* Family Chat */
+.chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:6px 4px 14px;}
+.chat-msg{max-width:75%;padding:9px 13px;border-radius:14px;background:var(--bg);align-self:flex-start;}
+.chat-msg.own{align-self:flex-end;background:var(--blue-tint);}
+.chat-msg .chat-sender{font-size:11.5px;font-weight:700;margin-bottom:2px;}
+.chat-msg .chat-text{font-size:14px;white-space:pre-wrap;word-break:break-word;}
+.chat-msg .chat-time{font-size:10px;color:var(--text-secondary);margin-top:3px;text-align:right;}
+.chat-msg .chat-del{float:right;margin-left:8px;background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:11px;opacity:.5;}
+.chat-msg .chat-del:hover{opacity:1;color:var(--error);}
+.chat-input-row{display:flex;gap:10px;border-top:1px solid var(--border);padding-top:12px;flex:none;}
+.chat-input-row input{flex:1;padding:10px 14px;border:1px solid var(--border-strong);border-radius:20px;font-family:inherit;font-size:14px;}
+.chat-empty{color:var(--text-secondary);font-size:13px;text-align:center;padding:20px;}
 @media print{
   body:not(.printing-report) .tl-filter-panel{display:none !important;}
 }
@@ -663,6 +676,7 @@ footer.hint a{color:var(--blue);}
     <button class="tab-btn" data-tab="checklists">✅ Checklisten</button>
     <button class="tab-btn" data-tab="whereis">🔎 Wo ist</button>
     <button class="tab-btn" data-tab="links">🔗 Links</button>
+    <button class="tab-btn" data-tab="familyChat">💬 Familienchat</button>
     <button class="tab-btn" data-tab="birthdaysList">🎂 Geburtstage</button>
     <button class="tab-btn" data-tab="termineListe">🗒️ Terminliste</button>
     <button class="tab-btn" data-tab="roomBooking">📋 Belegungsplan</button>
@@ -851,6 +865,16 @@ footer.hint a{color:var(--blue);}
           </div>
           <div class="dash-card-body">
             <div class="dash-list" id="dashLinks"></div>
+          </div>
+        </div>
+        <div class="dash-card" data-card-id="familyChat">
+          <div class="dash-card-header">
+            <span class="dash-drag-handle" title="Verschieben">⠿</span>
+            <h3>💬 Familienchat <span class="count-badge" id="dashChatCount">0</span></h3>
+            <button class="dash-collapse-btn" title="Ein-/Ausklappen">▾</button>
+          </div>
+          <div class="dash-card-body">
+            <div id="dashChat"></div>
           </div>
         </div>
         <div class="dash-card" data-card-id="roomBooking">
@@ -1208,6 +1232,17 @@ footer.hint a{color:var(--blue);}
           <button class="btn btn-primary" id="btnAddLink">+ Hinzufügen</button>
         </div>
         <div id="linksBody" style="padding:0 16px 16px;"></div>
+      </div>
+    </section>
+
+    <!-- FAMILY CHAT -->
+    <section class="view" id="view-familyChat">
+      <div class="panel" style="padding:16px;display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:400px;">
+        <div id="chatMessagesBody" class="chat-messages"></div>
+        <div class="chat-input-row">
+          <input type="text" id="chatInput" placeholder="Nachricht schreiben …" maxlength="2000">
+          <button class="btn btn-primary" id="btnSendChat">Senden</button>
+        </div>
       </div>
     </section>
 
@@ -2070,6 +2105,10 @@ footer.hint a{color:var(--blue);}
         <p class="help-text">Mitteilungen: Überschrift (fett) plus optionaler erklärender Text, mit Ablaufdatum. Checklisten: beliebig viele Listen mit abhakbaren Unterpunkten, jeweils mit Verantwortlichem und Termin auf Kopf- und Punktebene. Wo ist: ausschließlich für wirklich wichtige Dokumente (Ausweise, Impfausweise, Vollmachten, Patientenverfügung, Testament, …) inkl. Link und optionaler Verknüpfung mit einem Vermögens-/Inventareintrag. Links: für alltägliche Web-Adressen (z.B. der Mittagstisch einer Metzgerei), nach Kategorie gruppiert. Bei Wo ist und Links erscheinen mit 📍 markierte Einträge in "Diese Woche".</p>
       </div>
       <div>
+        <div class="help-section-title">💬 Familienchat</div>
+        <p class="help-text">Ein gemeinsamer, formloser Nachrichtenverlauf für die ganze Familie — im Gegensatz zu Mitteilungen ohne Struktur oder Ablaufdatum, einfach zum kurzen Austausch. Der Absendername kommt automatisch vom eingeloggten Konto (einmalig beim ersten Öffnen abgefragt, danach dauerhaft hinterlegt). Neue Nachrichten anderer Familienmitglieder erscheinen dank Cloud-Anbindung live, ohne Neuladen. Die letzten beiden Nachrichten erscheinen als Vorschau in "Diese Woche".</p>
+      </div>
+      <div>
         <div class="help-section-title">📋 Belegungsplan</div>
         <p class="help-text">Für gemeinsam genutzte Ressourcen (Home Office, Bad, Waschmaschine, …): erst Ressourcen anlegen (gruppiert nach Kategorie), dann pro Ressource Buchungen mit festem Slot (Vormittag/Nachmittag/Abend) oder freier Uhrzeit eintragen. Überschneidungen bei derselben Ressource werden als Warnung angezeigt, verhindern die Buchung aber nicht. "Diese Woche" zeigt, wer gerade dran ist, plus alle Buchungen nach Kategorie und Ressource gruppiert.</p>
       </div>
@@ -2316,7 +2355,7 @@ let fileHandle = null;
 let saveTimer = null;
 
 function loadInitial(){
-  const defaults = { events: [], shopping: [], cities: [], contracts: [], birthdays: [], payments: [], vouchers: [], inventory: [], medications: [], medicationLog: [], dashboardSettings: {order:[], collapsed:{}}, contacts: [], assets: [], income: [], incomingPayments: [], messages: [], checklists: [], whereis: [], roomBookings: [], resources: [], links: [], currency: "EUR", version: 1 };
+  const defaults = { events: [], shopping: [], cities: [], contracts: [], birthdays: [], payments: [], vouchers: [], inventory: [], medications: [], medicationLog: [], dashboardSettings: {order:[], collapsed:{}}, contacts: [], assets: [], income: [], incomingPayments: [], messages: [], checklists: [], whereis: [], roomBookings: [], resources: [], links: [], chatMessages: [], currency: "EUR", version: 1 };
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw) return Object.assign({}, defaults, JSON.parse(raw));
@@ -2435,7 +2474,7 @@ const SUPABASE_TABLE_MAP = {
   contracts: "contracts", payments: "payments", incomingPayments: "incoming_payments",
   vouchers: "vouchers", assets: "assets", income: "income", contacts: "contacts",
   messages: "messages", checklists: "checklists", whereis: "whereis_entries",
-  resources: "resources", roomBookings: "room_bookings", cities: "cities", links: "links"
+  resources: "resources", roomBookings: "room_bookings", cities: "cities", links: "links", chatMessages: "chat_messages"
 };
 
 function setSyncStatus(state){
@@ -2591,6 +2630,33 @@ async function handleAuthSuccess(user){
   await loadAllFromSupabase();
   renderAll();
   subscribeRealtime();
+  await ensureChatDisplayName();
+}
+
+// Anzeigename für den Familienchat: kommt vom Login-Konto (dort dauerhaft hinterlegt),
+// mit Fallback auf den Browser fürs rein lokale Nutzen ohne Supabase.
+function getChatSenderName(){
+  if(currentUser && currentUser.user_metadata && currentUser.user_metadata.display_name){
+    return currentUser.user_metadata.display_name;
+  }
+  return localStorage.getItem("chatDisplayName") || null;
+}
+async function ensureChatDisplayName(){
+  let name = getChatSenderName();
+  if(name) return name;
+  name = prompt("Wie sollen wir dich im Familienchat nennen? (einmalig, dauerhaft mit deinem Konto verknüpft)");
+  if(!name || !name.trim()) return null;
+  name = name.trim();
+  if(currentUser && supabaseClient){
+    try{
+      await supabaseClient.auth.updateUser({ data: { display_name: name } });
+      currentUser.user_metadata = currentUser.user_metadata || {};
+      currentUser.user_metadata.display_name = name;
+    }catch(e){ console.warn("Anzeigename konnte nicht gespeichert werden", e); }
+  } else {
+    localStorage.setItem("chatDisplayName", name);
+  }
+  return name;
 }
 
 document.getElementById("btnFullResync").addEventListener("click", ()=>{
@@ -2670,7 +2736,7 @@ document.getElementById("importInput").addEventListener("change", (e)=>{
     try{
       const imported = JSON.parse(reader.result);
       if(imported && typeof imported === "object"){
-        data = Object.assign({events:[],shopping:[],cities:[],contracts:[],birthdays:[],payments:[],vouchers:[],inventory:[],medications:[],medicationLog:[],dashboardSettings:{order:[],collapsed:{}},contacts:[],assets:[],income:[],incomingPayments:[],messages:[],checklists:[],whereis:[],roomBookings:[],resources:[],links:[],currency:"EUR",version:1}, imported);
+        data = Object.assign({events:[],shopping:[],cities:[],contracts:[],birthdays:[],payments:[],vouchers:[],inventory:[],medications:[],medicationLog:[],dashboardSettings:{order:[],collapsed:{}},contacts:[],assets:[],income:[],incomingPayments:[],messages:[],checklists:[],whereis:[],roomBookings:[],resources:[],links:[],chatMessages:[],currency:"EUR",version:1}, imported);
         persist(); // lokale Sicherung
         renderAll();
         if(supabaseClient && currentUser){ syncAllToSupabase(); } // kompletter Import betrifft potenziell alles -> Vollabgleich statt Einzeländerung
@@ -4863,6 +4929,62 @@ document.getElementById("btnDeleteLink").addEventListener("click", ()=>{
   renderDashboard();
 });
 
+/* ============ FAMILY CHAT ============ */
+async function sendChatMessage(){
+  const input = document.getElementById("chatInput");
+  const text = input.value.trim();
+  if(!text) return;
+  let sender = getChatSenderName();
+  if(!sender){ sender = await ensureChatDisplayName(); }
+  if(!sender) sender = "Familie";
+  const msg = {
+    id: uid(),
+    text,
+    senderName: sender,
+    senderId: currentUser ? currentUser.id : null,
+    createdAt: new Date().toISOString()
+  };
+  data.chatMessages.push(msg);
+  input.value = "";
+  persist({table:"chatMessages", op:"upsert", item:msg});
+  renderChatMessages();
+  renderDashboard();
+}
+document.getElementById("btnSendChat").addEventListener("click", sendChatMessage);
+document.getElementById("chatInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") sendChatMessage(); });
+
+function renderChatMessages(){
+  const box = document.getElementById("chatMessagesBody");
+  box.innerHTML = "";
+  if(data.chatMessages.length===0){
+    box.innerHTML = '<div class="chat-empty">Noch keine Nachrichten. Schreib die erste!</div>';
+    return;
+  }
+  const mySender = getChatSenderName();
+  const sorted = data.chatMessages.slice().sort((a,b)=> (a.createdAt||"").localeCompare(b.createdAt||""));
+  sorted.forEach(m=>{
+    const row = document.createElement("div");
+    row.className = "chat-msg" + (m.senderName===mySender ? " own" : "");
+    const del = document.createElement("button"); del.className = "chat-del"; del.textContent = "✕"; del.title = "Löschen";
+    del.addEventListener("click", ()=>{
+      data.chatMessages = data.chatMessages.filter(x=>x.id!==m.id);
+      persist({table:"chatMessages", op:"delete", id:m.id});
+      renderChatMessages();
+      renderDashboard();
+    });
+    const sender = document.createElement("div"); sender.className = "chat-sender";
+    sender.style.color = colorFor(m.senderName);
+    sender.textContent = m.senderName || "Familie";
+    const text = document.createElement("div"); text.className = "chat-text"; text.textContent = m.text;
+    const time = document.createElement("div"); time.className = "chat-time";
+    const d = new Date(m.createdAt);
+    time.textContent = d.toLocaleDateString("de-DE") + " · " + d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+    row.appendChild(del); row.appendChild(sender); row.appendChild(text); row.appendChild(time);
+    box.appendChild(row);
+  });
+  box.scrollTop = box.scrollHeight;
+}
+
 /* ============ RESOURCES & ROOM BOOKING (Belegungsplan) ============ */
 const RB_SLOT_TIMES = { vormittag: ["08:00","12:00"], nachmittag: ["12:00","17:00"], abend: ["17:00","21:00"] };
 const RB_SLOT_LABELS = { vormittag: "Vormittag (08–12 Uhr)", nachmittag: "Nachmittag (12–17 Uhr)", abend: "Abend (17–21 Uhr)" };
@@ -6521,6 +6643,24 @@ function renderDashboard(){
     });
   }
 
+  /* -- Familienchat: letzte Nachrichten als Vorschau -- */
+  const chatBox = document.getElementById("dashChat");
+  chatBox.innerHTML = "";
+  document.getElementById("dashChatCount").textContent = data.chatMessages.length;
+  if(data.chatMessages.length===0){
+    chatBox.appendChild(dashEmpty("Noch keine Nachrichten im Familienchat."));
+  } else {
+    const recent = data.chatMessages.slice().sort((a,b)=> (a.createdAt||"").localeCompare(b.createdAt||"")).slice(-2);
+    recent.forEach(m=>{
+      const d = new Date(m.createdAt);
+      chatBox.appendChild(dashRow(
+        colorFor(m.senderName), m.senderName || "Familie", m.text,
+        null,
+        ()=>{ document.querySelector('.tab-btn[data-tab="familyChat"]').click(); }
+      ));
+    });
+  }
+
   /* -- Belegungsplan: heute + Rest der Woche, gruppiert nach Kategorie & Ressource -- */
   const rbBox = document.getElementById("dashRoomBooking");
   rbBox.innerHTML = "";
@@ -6966,6 +7106,7 @@ function renderAll(){
   renderChecklists();
   renderWhereis();
   renderLinks();
+  renderChatMessages();
   renderResourceList();
   renderRoomBookings();
   renderBirthdaysList();
