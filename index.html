@@ -1238,6 +1238,9 @@ footer.hint a{color:var(--blue);}
     <!-- FAMILY CHAT -->
     <section class="view" id="view-familyChat">
       <div class="panel" style="padding:16px;display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:400px;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+          <button class="btn btn-secondary" id="btnChatMute" title="Benachrichtigungston ein-/ausschalten">🔔 Ton an</button>
+        </div>
         <div id="chatMessagesBody" class="chat-messages"></div>
         <div class="chat-input-row">
           <input type="text" id="chatInput" placeholder="Nachricht schreiben …" maxlength="2000">
@@ -2600,8 +2603,13 @@ let pendingRealtimeReload = false;
 function subscribeRealtime(){
   if(!supabaseClient || realtimeChannel) return;
   realtimeChannel = supabaseClient.channel("family-dashboard-changes");
-  Object.values(SUPABASE_TABLE_MAP).forEach(tableName=>{
-    realtimeChannel.on("postgres_changes", { event: "*", schema: "public", table: tableName }, ()=>{
+  Object.entries(SUPABASE_TABLE_MAP).forEach(([localKey, tableName])=>{
+    realtimeChannel.on("postgres_changes", { event: "*", schema: "public", table: tableName }, (payload)=>{
+      if(localKey==="chatMessages" && payload.eventType==="INSERT"){
+        const newMsg = payload.new && payload.new.payload;
+        const myId = currentUser ? currentUser.id : null;
+        if(newMsg && newMsg.senderId !== myId){ playChatNotificationSound(); }
+      }
       // Während wir selbst gerade hochladen, nicht mittendrin neu laden (sonst Race Condition:
       // ein noch unvollständiger Zwischenstand würde frisch importierte/angelegte Einträge
       // wieder überschreiben). Stattdessen einmalig nachholen, sobald der eigene Sync fertig ist.
@@ -3228,14 +3236,17 @@ document.getElementById("btnSaveEvent").addEventListener("click", ()=>{
     color: eventCategoryColor(category, person),
     recurrence
   };
+  let savedId;
   if(id){
     const idx = data.events.findIndex(e=>e.id===id);
     if(idx>-1) data.events[idx] = Object.assign(data.events[idx], payload);
+    savedId = id;
   } else {
     payload.id = uid();
     data.events.push(payload);
+    savedId = payload.id;
   }
-  persist({table:"events", op:"upsert", item: data.events.find(e=>e.id===payload.id)});
+  persist({table:"events", op:"upsert", item: data.events.find(e=>e.id===savedId)});
   eventOverlay.classList.remove("open");
   renderCalendar();
 });
@@ -3301,14 +3312,17 @@ document.getElementById("btnSaveBirthday").addEventListener("click", ()=>{
     contactId: document.getElementById("birthdayContactLink").value || null,
     notes: document.getElementById("birthdayNotes").value.trim()
   };
+  let savedId;
   if(id){
     const idx = data.birthdays.findIndex(b=>b.id===id);
     if(idx>-1) data.birthdays[idx] = Object.assign(data.birthdays[idx], payload);
+    savedId = id;
   } else {
     payload.id = uid();
     data.birthdays.push(payload);
+    savedId = payload.id;
   }
-  persist({table:"birthdays", op:"upsert", item: data.birthdays.find(b=>b.id===payload.id)});
+  persist({table:"birthdays", op:"upsert", item: data.birthdays.find(b=>b.id===savedId)});
   birthdayOverlay.classList.remove("open");
   renderCalendar();
   renderBirthdaysList();
@@ -4953,6 +4967,39 @@ async function sendChatMessage(){
 document.getElementById("btnSendChat").addEventListener("click", sendChatMessage);
 document.getElementById("chatInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter") sendChatMessage(); });
 
+// Benachrichtigungston bei neuen Chat-Nachrichten: synthetisch erzeugt (kein externer
+// Datei-Import nötig), spielt einen kurzen freundlichen Zweiklang.
+let audioCtx = null;
+function isChatSoundMuted(){ return localStorage.getItem("chatSoundMuted") === "1"; }
+function playChatNotificationSound(){
+  if(isChatSoundMuted()) return;
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.setValueAtTime(1174.66, now + 0.09);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  }catch(e){ console.warn("Ton konnte nicht abgespielt werden", e); }
+}
+function updateChatMuteButton(){
+  const btn = document.getElementById("btnChatMute");
+  if(!btn) return;
+  btn.textContent = isChatSoundMuted() ? "🔕 Ton aus" : "🔔 Ton an";
+}
+document.getElementById("btnChatMute").addEventListener("click", ()=>{
+  localStorage.setItem("chatSoundMuted", isChatSoundMuted() ? "0" : "1");
+  updateChatMuteButton();
+});
+updateChatMuteButton();
+
 function renderChatMessages(){
   const box = document.getElementById("chatMessagesBody");
   box.innerHTML = "";
@@ -5775,14 +5822,17 @@ document.getElementById("btnSaveContract").addEventListener("click", ()=>{
     cancelIntent: document.getElementById("contractCancelIntent").checked,
     contactId: document.getElementById("contractContactLink").value || null
   };
+  let savedId;
   if(id){
     const idx = data.contracts.findIndex(c=>c.id===id);
     if(idx>-1) data.contracts[idx] = Object.assign(data.contracts[idx], payload);
+    savedId = id;
   } else {
     payload.id = uid();
     data.contracts.push(payload);
+    savedId = payload.id;
   }
-  persist({table:"contracts", op:"upsert", item: data.contracts.find(c=>c.id===payload.id)});
+  persist({table:"contracts", op:"upsert", item: data.contracts.find(c=>c.id===savedId)});
   contractOverlay.classList.remove("open");
   renderContracts();
   renderDashboard();
@@ -5861,14 +5911,17 @@ document.getElementById("btnSaveAsset").addEventListener("click", ()=>{
     notes: document.getElementById("assetNotes").value.trim(),
     contactId: document.getElementById("assetContactLink").value || null
   };
+  let savedId;
   if(id){
     const idx = data.assets.findIndex(a=>a.id===id);
     if(idx>-1) data.assets[idx] = Object.assign(data.assets[idx], payload);
+    savedId = id;
   } else {
     payload.id = uid();
     data.assets.push(payload);
+    savedId = payload.id;
   }
-  persist({table:"assets", op:"upsert", item: data.assets.find(a=>a.id===payload.id)});
+  persist({table:"assets", op:"upsert", item: data.assets.find(a=>a.id===savedId)});
   assetOverlay.classList.remove("open");
   renderAssets();
   renderDashboard();
@@ -6013,14 +6066,17 @@ document.getElementById("btnSaveIncome").addEventListener("click", ()=>{
     notes: document.getElementById("incomeNotes").value.trim(),
     contactId: document.getElementById("incomeContactLink").value || null
   };
+  let savedId;
   if(id){
     const idx = data.income.findIndex(i=>i.id===id);
     if(idx>-1) data.income[idx] = Object.assign(data.income[idx], payload);
+    savedId = id;
   } else {
     payload.id = uid();
     data.income.push(payload);
+    savedId = payload.id;
   }
-  persist({table:"income", op:"upsert", item: data.income.find(i=>i.id===payload.id)});
+  persist({table:"income", op:"upsert", item: data.income.find(i=>i.id===savedId)});
   incomeOverlay.classList.remove("open");
   renderIncome();
   renderDashboard();
@@ -6121,15 +6177,18 @@ document.getElementById("btnSaveContact").addEventListener("click", ()=>{
     address: document.getElementById("contactAddress").value.trim(),
     notes: document.getElementById("contactNotes").value.trim()
   };
+  let savedId;
   if(id){
     const idx = data.contacts.findIndex(c=>c.id===id);
     if(idx>-1) data.contacts[idx] = Object.assign(data.contacts[idx], payload);
+    savedId = id;
   } else {
     payload.id = uid();
     payload.addedAt = new Date().toISOString();
     data.contacts.push(payload);
+    savedId = payload.id;
   }
-  persist({table:"contacts", op:"upsert", item: data.contacts.find(c=>c.id===payload.id)});
+  persist({table:"contacts", op:"upsert", item: data.contacts.find(c=>c.id===savedId)});
   contactOverlay.classList.remove("open");
   renderContactsList();
   renderDashboard();
