@@ -2703,7 +2703,9 @@ function subscribeRealtime(){
       if(localKey==="chatMessages" && payload.eventType==="INSERT"){
         const newMsg = payload.new && payload.new.payload;
         const myId = currentUser ? currentUser.id : null;
+        console.log("[Chat-Ton] Neue Nachricht empfangen. senderId:", newMsg && newMsg.senderId, "| eigene id:", myId, "| Kontext-Status:", audioCtx ? audioCtx.state : "noch nicht angelegt");
         if(newMsg && newMsg.senderId !== myId){ playChatNotificationSound(); }
+        else { console.log("[Chat-Ton] Kein Ton, da als eigene Nachricht erkannt."); }
       }
       // Während wir selbst gerade hochladen, nicht mittendrin neu laden (sonst Race Condition:
       // ein noch unvollständiger Zwischenstand würde frisch importierte/angelegte Einträge
@@ -5265,9 +5267,19 @@ let audioCtx = null;
 // Berührung/Klick auf die Seite vorbereiten, lange bevor der erste Ton wirklich gebraucht wird.
 function primeAudioContext(){
   if(!audioCtx){
-    try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return; }
+    try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ console.warn("[Chat-Ton] Kontext konnte nicht angelegt werden", e); return; }
   }
   if(audioCtx.state === "suspended"){ audioCtx.resume().catch(()=>{}); }
+  // Manche Browser (v.a. iOS) verlangen zusätzlich zu resume() einen tatsächlich gestarteten,
+  // stummen Ton innerhalb der Klick-Interaktion, um die Wiedergabe dauerhaft freizuschalten.
+  try{
+    const silent = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    g.gain.value = 0;
+    silent.connect(g); g.connect(audioCtx.destination);
+    silent.start(); silent.stop(audioCtx.currentTime + 0.05);
+  }catch(e){ console.warn("[Chat-Ton] Freischalt-Testton fehlgeschlagen", e); }
+  console.log("[Chat-Ton] Audio-Kontext vorbereitet, Status:", audioCtx.state);
 }
 ["click","touchstart","keydown"].forEach(evt=> document.addEventListener(evt, primeAudioContext, { once:true, passive:true }));
 
