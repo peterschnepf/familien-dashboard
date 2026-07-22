@@ -627,6 +627,7 @@ footer.hint a{color:var(--blue);}
       <button class="btn btn-ghost-light" id="btnToolsMenu" title="Menü">⋮</button>
       <div id="toolsActions" class="tools-actions">
         <button class="btn btn-ghost-light" id="btnSignOut" title="Ausloggen" style="display:none;">🚪 Ausloggen</button>
+        <button class="btn btn-ghost-light" id="btnFullResync" title="Kompletten lokalen Stand nach Supabase hochladen (für Ersteinrichtung/Fehlerbehebung)">🔄 Vollständig synchronisieren</button>
         <select id="currencySelect" class="btn btn-ghost-light" style="padding:8px 10px;" title="Währung">
           <option value="EUR">€ EUR</option>
           <option value="USD">$ USD</option>
@@ -957,6 +958,14 @@ footer.hint a{color:var(--blue);}
           <input type="number" id="invTarget" placeholder="Zielbestand" min="0" step="1" value="5" style="width:120px;">
           <input type="text" id="invSupplier" placeholder="Bevorzugter Lieferant (optional)" style="max-width:180px;">
           <button class="btn btn-primary" id="btnAddInventory">+ Hinzufügen</button>
+        </div>
+        <div style="padding:12px 0 0;">
+          <label style="font-size:12.5px;font-weight:600;color:var(--text-secondary);margin-right:8px;">Gruppieren nach</label>
+          <select id="invGroupBy" style="padding:7px 10px;border:1px solid var(--border-strong);border-radius:6px;font-family:inherit;font-size:13px;">
+            <option value="none">Keine (alphabetisch)</option>
+            <option value="category">Kategorie</option>
+            <option value="supplier">Lieferant</option>
+          </select>
         </div>
         <div class="inv-list" id="inventoryGrid" style="margin-top:16px;"></div>
       </div>
@@ -2322,7 +2331,14 @@ function setSaveStatus(state){
   else { dot.className = "dot"; label.textContent = "Gespeichert"; }
 }
 
-function persist(){
+// Warteschlange für gezielte Cloud-Änderungen: jede Änderung (Anlegen/Bearbeiten/Löschen
+// eines einzelnen Eintrags) wird als eigener, präziser Auftrag eingereiht und der Reihe nach
+// abgearbeitet - nichts wird mehr "erraten" (kein Abgleich mehr über "was fehlt lokal").
+const cloudChangeQueue = [];
+let processingCloudQueue = false;
+
+// change: {table, op:'upsert', item} | {table, op:'upsertMany', items} | {table, op:'delete', id} | {op:'settings'}
+function persist(change){
   setSaveStatus("saving");
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async ()=>{
@@ -2336,8 +2352,63 @@ function persist(){
       }catch(e){ console.warn("Datei-Speicherfehler", e); }
     }
     setSaveStatus("saved");
-    if(supabaseClient && currentUser){ syncAllToSupabase(); } // im Hintergrund, blockiert die UI nicht
   }, 250);
+
+  if(change && supabaseClient && currentUser){
+    cloudChangeQueue.push(change);
+    processCloudQueue();
+  }
+}
+
+async function applyCloudChange(change){
+  const tableName = change.table ? SUPABASE_TABLE_MAP[change.table] : null;
+  try{
+    if(change.op === "upsert" && tableName && change.item && change.item.id){
+      const { error } = await supabaseClient.from(tableName).upsert({ id: change.item.id, payload: change.item });
+      if(error){ console.warn("Cloud-Speichern fehlgeschlagen:", tableName, error.message); setSyncStatus("error"); return; }
+    } else if(change.op === "upsertMany" && tableName && change.items && change.items.length){
+      const rows = change.items.filter(it=>it && it.id).map(it=>({ id: it.id, payload: it }));
+      if(rows.length){
+        const { error } = await supabaseClient.from(tableName).upsert(rows);
+        if(error){ console.warn("Cloud-Speichern fehlgeschlagen:", tableName, error.message); setSyncStatus("error"); return; }
+      }
+    } else if(change.op === "delete" && tableName && change.id){
+      const { error } = await supabaseClient.from(tableName).delete().eq("id", change.id);
+      if(error){ console.warn("Cloud-Löschen fehlgeschlagen:", tableName, error.message); setSyncStatus("error"); return; }
+    } else if(change.op === "deleteMany" && tableName && change.ids && change.ids.length){
+      const { error } = await supabaseClient.from(tableName).delete().in("id", change.ids);
+      if(error){ console.warn("Cloud-Löschen fehlgeschlagen:", tableName, error.message); setSyncStatus("error"); return; }
+    } else if(change.op === "settings"){
+      const { error } = await supabaseClient.from("app_settings").update({
+        payload: { dashboardSettings: data.dashboardSettings, currency: data.currency }
+      }).eq("id", true);
+      if(error){ console.warn("Einstellungen konnten nicht synchronisiert werden:", error.message); setSyncStatus("error"); return; }
+    }
+    setSyncStatus("idle");
+  }catch(e){
+    console.warn("Cloud-Änderung fehlgeschlagen:", change, e);
+    setSyncStatus("error");
+  }
+}
+
+async function processCloudQueue(){
+  if(processingCloudQueue || isLoadingFromCloud) return; // wird nach Ende des Ladens automatisch fortgesetzt
+  processingCloudQueue = true;
+  isSyncingToCloud = true;
+  setSyncStatus("syncing");
+  while(cloudChangeQueue.length && !isLoadingFromCloud){
+    const change = cloudChangeQueue.shift();
+    await applyCloudChange(change);
+  }
+  processingCloudQueue = false;
+  isSyncingToCloud = false;
+  if(pendingRealtimeReload){
+    pendingRealtimeReload = false;
+    loadAllFromSupabase().then(()=>{ renderAll(); });
+  }
+  if(cloudChangeQueue.length && !isLoadingFromCloud){
+    processCloudQueue();
+  }
 }
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -2378,8 +2449,11 @@ function setSyncStatus(state){
 }
 
 // Lädt den kompletten Datenbestand aus Supabase in das lokale data-Objekt.
+let isLoadingFromCloud = false;
+
 async function loadAllFromSupabase(){
   if(!supabaseClient) return;
+  isLoadingFromCloud = true;
   setSyncStatus("syncing");
   let hadError = false;
   try{
@@ -2402,13 +2476,23 @@ async function loadAllFromSupabase(){
   }catch(e){
     console.warn("Cloud-Laden fehlgeschlagen", e);
     setSyncStatus("error");
+  } finally {
+    isLoadingFromCloud = false;
+    // Änderungen, die während des Ladens angefallen sind, jetzt sicher nachholen.
+    if(cloudChangeQueue.length) processCloudQueue();
   }
 }
 
-// Schreibt den kompletten aktuellen data-Zustand nach Supabase (Upsert je Bereich,
-// überzählige Zeilen werden gelöscht). Läuft nach jedem persist() im Hintergrund.
+// Manueller Vollabgleich: lädt nichts, sondern schreibt den kompletten aktuellen Stand
+// nach Supabase. Für die Ersteinrichtung (bestehende lokale Daten erstmals hochladen)
+// und zur Fehlerbehebung gedacht - der normale Betrieb läuft über die gezielte
+// Änderungs-Warteschlange oben, nicht mehr automatisch über diese Funktion.
 async function syncAllToSupabase(){
   if(!supabaseClient || !currentUser) return;
+  if(isLoadingFromCloud){
+    setTimeout(syncAllToSupabase, 500); // kurz warten, bis das Laden fertig ist, dann erneut versuchen
+    return;
+  }
   isSyncingToCloud = true;
   setSyncStatus("syncing");
   let hadError = false;
@@ -2433,7 +2517,14 @@ async function syncAllToSupabase(){
         } else {
           const keepIds = new Set(rows.map(r=>r.id));
           const idsToDelete = (existingRows||[]).map(r=>r.id).filter(id=>!keepIds.has(id));
-          if(idsToDelete.length){
+          // Sicherheitsgrenze: nie mehr als die Hälfte (und mind. 5) einer Tabelle auf einmal
+          // automatisch löschen. Das wäre eher ein Zeichen für einen unvollständigen lokalen
+          // Datenstand als für tatsächlich gewollte Löschungen - im Zweifel lieber nichts tun
+          // und den Fehler sichtbar machen, als Daten zu verlieren.
+          if(idsToDelete.length >= 5 && idsToDelete.length > (existingRows||[]).length / 2){
+            console.warn("Aufräumen übersprungen (Sicherheitsgrenze):", tableName, idsToDelete.length, "von", (existingRows||[]).length, "Zeilen wären betroffen gewesen.");
+            hadError = true;
+          } else if(idsToDelete.length){
             const { error: delError } = await supabaseClient.from(tableName).delete().in("id", idsToDelete);
             if(delError){ console.warn("Aufräumen fehlgeschlagen:", tableName, delError.message); hadError = true; }
           }
@@ -2486,6 +2577,7 @@ function subscribeRealtime(){
 function showAuthOverlay(show){
   document.getElementById("authOverlay").style.display = show ? "flex" : "none";
   document.getElementById("btnSignOut").style.display = show ? "none" : "inline-flex";
+  document.getElementById("btnFullResync").style.display = show ? "none" : "inline-flex";
 }
 function authErrorMsg(msg){
   const el = document.getElementById("authError");
@@ -2500,6 +2592,11 @@ async function handleAuthSuccess(user){
   renderAll();
   subscribeRealtime();
 }
+
+document.getElementById("btnFullResync").addEventListener("click", ()=>{
+  if(!confirm("Den kompletten aktuellen Stand dieses Geräts nach Supabase hochladen? Das ist normalerweise nicht nötig (jede Änderung wird automatisch übertragen) - nur für die Ersteinrichtung oder falls mal was nicht angekommen sein sollte.")) return;
+  syncAllToSupabase();
+});
 
 if(SUPABASE_CONFIGURED && supabaseClient){
   document.getElementById("btnSignIn").addEventListener("click", async ()=>{
@@ -2524,6 +2621,7 @@ if(SUPABASE_CONFIGURED && supabaseClient){
   // Kein Supabase konfiguriert: App funktioniert wie bisher rein lokal, kein Login nötig.
   document.getElementById("authOverlay").style.display = "none";
   document.getElementById("btnSignOut").style.display = "none";
+  document.getElementById("btnFullResync").style.display = "none";
   setSyncStatus("idle");
 }
 
@@ -2573,8 +2671,9 @@ document.getElementById("importInput").addEventListener("change", (e)=>{
       const imported = JSON.parse(reader.result);
       if(imported && typeof imported === "object"){
         data = Object.assign({events:[],shopping:[],cities:[],contracts:[],birthdays:[],payments:[],vouchers:[],inventory:[],medications:[],medicationLog:[],dashboardSettings:{order:[],collapsed:{}},contacts:[],assets:[],income:[],incomingPayments:[],messages:[],checklists:[],whereis:[],roomBookings:[],resources:[],links:[],currency:"EUR",version:1}, imported);
-        persist();
+        persist(); // lokale Sicherung
         renderAll();
+        if(supabaseClient && currentUser){ syncAllToSupabase(); } // kompletter Import betrifft potenziell alles -> Vollabgleich statt Einzeländerung
       }
     }catch(err){ alert("Die Datei konnte nicht gelesen werden. Ist es eine gültige JSON-Datei?"); }
   };
@@ -2585,7 +2684,7 @@ document.getElementById("importInput").addEventListener("change", (e)=>{
 /* ============ CURRENCY ============ */
 document.getElementById("currencySelect").addEventListener("change", (e)=>{
   data.currency = e.target.value;
-  persist();
+  persist({op:"settings"});
   renderAll();
 });
 
@@ -2748,21 +2847,24 @@ document.getElementById("btnConfirmIcalImport").addEventListener("click", ()=>{
   const category = document.getElementById("icalImportCategory").value.trim();
   const person = document.getElementById("icalImportPerson").value.trim();
   const existingKeys = new Set(data.events.map(e=> e.date+"|"+e.title));
+  const newlyAdded = [];
   let added = 0, skipped = 0;
   icalParsedEvents.forEach(pe=>{
     const key = pe.date+"|"+pe.title;
     if(existingKeys.has(key)){ skipped++; return; }
-    data.events.push({
+    const newEvent = {
       id: uid(), title: pe.title, date: pe.date, time: null,
       person, location: "", category,
       notes: "Importiert aus iCal-Datei",
       color: eventCategoryColor(category, person),
       recurrence: null
-    });
+    };
+    data.events.push(newEvent);
+    newlyAdded.push(newEvent);
     existingKeys.add(key);
     added++;
   });
-  persist();
+  persist({table:"events", op:"upsertMany", items: newlyAdded});
   icalImportOverlay.classList.remove("open");
   renderCalendar();
   renderDashboard();
@@ -3067,14 +3169,14 @@ document.getElementById("btnSaveEvent").addEventListener("click", ()=>{
     payload.id = uid();
     data.events.push(payload);
   }
-  persist();
+  persist({table:"events", op:"upsert", item: data.events.find(e=>e.id===payload.id)});
   eventOverlay.classList.remove("open");
   renderCalendar();
 });
 document.getElementById("btnDeleteEvent").addEventListener("click", ()=>{
   const id = document.getElementById("eventId").value;
   data.events = data.events.filter(e=>e.id!==id);
-  persist();
+  persist({table:"events", op:"delete", id});
   eventOverlay.classList.remove("open");
   renderCalendar();
 });
@@ -3140,7 +3242,7 @@ document.getElementById("btnSaveBirthday").addEventListener("click", ()=>{
     payload.id = uid();
     data.birthdays.push(payload);
   }
-  persist();
+  persist({table:"birthdays", op:"upsert", item: data.birthdays.find(b=>b.id===payload.id)});
   birthdayOverlay.classList.remove("open");
   renderCalendar();
   renderBirthdaysList();
@@ -3148,7 +3250,7 @@ document.getElementById("btnSaveBirthday").addEventListener("click", ()=>{
 document.getElementById("btnDeleteBirthday").addEventListener("click", ()=>{
   const id = document.getElementById("birthdayId").value;
   data.birthdays = data.birthdays.filter(b=>b.id!==id);
-  persist();
+  persist({table:"birthdays", op:"delete", id});
   birthdayOverlay.classList.remove("open");
   renderCalendar();
   renderBirthdaysList();
@@ -3371,7 +3473,7 @@ document.getElementById("shopText").addEventListener("keydown",(e)=>{ if(e.key==
 function addShopItem(){
   const text = document.getElementById("shopText").value.trim();
   if(!text) return;
-  data.shopping.push({
+  const newItem = {
     id: uid(),
     text,
     qty: parseFloat(document.getElementById("shopQty").value) || 1,
@@ -3382,13 +3484,14 @@ function addShopItem(){
     date: document.getElementById("shopDate").value || null,
     done: false,
     addedAt: new Date().toISOString()
-  });
+  };
+  data.shopping.push(newItem);
   document.getElementById("shopText").value = "";
   document.getElementById("shopPerson").value = "";
   document.getElementById("shopSupplier").value = "";
   document.getElementById("shopDate").value = "";
   document.getElementById("shopText").focus();
-  persist();
+  persist({table:"shopping", op:"upsert", item:newItem});
   renderShopping();
   renderDashboard();
 }
@@ -3396,7 +3499,7 @@ function addShopItem(){
 function makeShopRow(item){
   const row = document.createElement("div"); row.className = "shop-item" + (item.done?" done":"");
   const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=item.done;
-  chk.addEventListener("change", ()=>{ item.done = chk.checked; persist(); renderShopping(); renderDashboard(); });
+  chk.addEventListener("change", ()=>{ item.done = chk.checked; persist({table:"shopping", op:"upsert", item}); renderShopping(); renderDashboard(); });
   const isManual = !item.linkedInventoryId;
   const txt = document.createElement("div"); txt.className="txt"; txt.textContent = item.text;
   if(isManual){
@@ -3423,7 +3526,7 @@ function makeShopRow(item){
     row.appendChild(tag);
   }
   const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-  del.addEventListener("click", ()=>{ data.shopping = data.shopping.filter(i=>i.id!==item.id); persist(); renderShopping(); renderDashboard(); });
+  del.addEventListener("click", ()=>{ data.shopping = data.shopping.filter(i=>i.id!==item.id); persist({table:"shopping", op:"delete", id:item.id}); renderShopping(); renderDashboard(); });
   row.appendChild(del);
   return row;
 }
@@ -3503,7 +3606,7 @@ document.getElementById("btnSaveShopEdit").addEventListener("click", ()=>{
   item.person = document.getElementById("shopEditPerson").value.trim();
   item.supplier = document.getElementById("shopEditSupplier").value.trim();
   item.date = document.getElementById("shopEditDate").value || null;
-  persist();
+  persist({table:"shopping", op:"upsert", item});
   shopEditOverlay.classList.remove("open");
   renderShopping();
   renderDashboard();
@@ -3511,15 +3614,16 @@ document.getElementById("btnSaveShopEdit").addEventListener("click", ()=>{
 document.getElementById("btnDeleteShopEdit").addEventListener("click", ()=>{
   const id = document.getElementById("shopEditId").value;
   data.shopping = data.shopping.filter(x=>x.id!==id);
-  persist();
+  persist({table:"shopping", op:"delete", id});
   shopEditOverlay.classList.remove("open");
   renderShopping();
   renderDashboard();
 });
 
 document.getElementById("btnClearDone").addEventListener("click", ()=>{
+  const removedIds = data.shopping.filter(i=>i.done).map(i=>i.id);
   data.shopping = data.shopping.filter(i=>!i.done);
-  persist();
+  persist({table:"shopping", op:"deleteMany", ids:removedIds});
   renderShopping();
   renderDashboard();
 });
@@ -3551,7 +3655,7 @@ function addInventoryItem(){
   document.getElementById("invTarget").value = "5";
   document.getElementById("invSupplier").value = "";
   document.getElementById("invName").focus();
-  persist();
+  persist({table:"inventory", op:"upsert", item});
   renderInventory();
   renderShopping();
   renderDashboard();
@@ -3569,6 +3673,7 @@ function syncInventoryToShopping(item){
     if(linked){
       linked.qty = buyQty;
       linked.supplier = item.supplier || "";
+      persist({table:"shopping", op:"upsert", item:linked});
     } else {
       const newEntry = {
         id: uid(), text: item.name, qty: buyQty, unit: item.unit || "Stück",
@@ -3577,10 +3682,12 @@ function syncInventoryToShopping(item){
       };
       data.shopping.push(newEntry);
       item.shoppingLinkId = newEntry.id;
+      persist({table:"shopping", op:"upsert", item:newEntry});
     }
   } else if(linked){
     data.shopping = data.shopping.filter(s=>s.id!==linked.id);
     item.shoppingLinkId = null;
+    persist({table:"shopping", op:"delete", id:linked.id});
   } else {
     item.shoppingLinkId = null;
   }
@@ -3589,7 +3696,7 @@ function syncInventoryToShopping(item){
 function setInventoryQty(item, newQty){
   item.qty = Math.max(0, newQty);
   syncInventoryToShopping(item);
-  persist();
+  persist({table:"inventory", op:"upsert", item});
   renderInventory();
   renderShopping();
   renderDashboard();
@@ -3627,7 +3734,7 @@ function makeInventoryRow(item){
   row.querySelector(".name").addEventListener("click", ()=> openInvEditModal(item));
   row.querySelector(".inv-del").addEventListener("click", ()=>{
     data.inventory = data.inventory.filter(i=>i.id!==item.id);
-    persist();
+    persist({table:"inventory", op:"delete", id:item.id});
     renderInventory();
   });
   row.querySelector(".minus").addEventListener("click", ()=> setInventoryQty(item, item.qty - 1));
@@ -3637,7 +3744,7 @@ function makeInventoryRow(item){
   row.querySelector(".inv-reorder-input").addEventListener("change",(e)=>{
     item.reorderLevel = Number(e.target.value) || 0;
     syncInventoryToShopping(item);
-    persist();
+    persist({table:"inventory", op:"upsert", item});
     renderInventory();
     renderShopping();
     renderDashboard();
@@ -3645,7 +3752,7 @@ function makeInventoryRow(item){
   row.querySelector(".inv-target-input").addEventListener("change",(e)=>{
     item.targetLevel = Number(e.target.value) || 0;
     syncInventoryToShopping(item);
-    persist();
+    persist({table:"inventory", op:"upsert", item});
     renderInventory();
     renderShopping();
     renderDashboard();
@@ -3653,7 +3760,7 @@ function makeInventoryRow(item){
   row.querySelector(".inv-supplier-input").addEventListener("change",(e)=>{
     item.supplier = e.target.value.trim();
     syncInventoryToShopping(item); // hält den Lieferanten im verknüpften Einkaufslisten-Eintrag aktuell
-    persist();
+    persist({table:"inventory", op:"upsert", item});
     renderInventory();
     renderShopping();
     renderDashboard();
@@ -3668,8 +3775,31 @@ function renderInventory(){
     grid.innerHTML = '<div class="shop-empty">Noch keine Bestände erfasst. Füge oben einen Artikel hinzu.</div>';
     return;
   }
-  data.inventory.slice().sort((a,b)=> (a.name||"").localeCompare(b.name||"")).forEach(item=> grid.appendChild(makeInventoryRow(item)));
+  const groupBy = document.getElementById("invGroupBy").value;
+  if(groupBy==="none"){
+    data.inventory.slice().sort((a,b)=> (a.name||"").localeCompare(b.name||"")).forEach(item=> grid.appendChild(makeInventoryRow(item)));
+    return;
+  }
+  const NO_VALUE = groupBy==="category" ? "Ohne Kategorie" : "Ohne Lieferant";
+  const groups = {};
+  data.inventory.forEach(item=>{
+    const raw = groupBy==="category" ? item.category : item.supplier;
+    const key = raw && raw.trim() ? raw.trim() : NO_VALUE;
+    (groups[key] = groups[key] || []).push(item);
+  });
+  const order = Object.keys(groups).filter(k=>k!==NO_VALUE).sort((a,b)=>a.localeCompare(b,"de"));
+  if(groups[NO_VALUE]) order.push(NO_VALUE);
+  order.forEach(key=>{
+    const items = groups[key];
+    const block = document.createElement("div"); block.className = "shop-cat";
+    const h = document.createElement("h4");
+    h.innerHTML = `${escapeHtml(key)} <span class="count">${items.length}</span>`;
+    block.appendChild(h);
+    items.sort((a,b)=> (a.name||"").localeCompare(b.name||"")).forEach(item=> block.appendChild(makeInventoryRow(item)));
+    grid.appendChild(block);
+  });
 }
+document.getElementById("invGroupBy").addEventListener("change", renderInventory);
 
 /* ---- Bestände: bearbeiten (Modal) ---- */
 const invEditOverlay = document.getElementById("invEditOverlay");
@@ -3701,7 +3831,7 @@ document.getElementById("btnSaveInvEdit").addEventListener("click", ()=>{
   item.reorderLevel = Number(document.getElementById("invEditReorder").value) || 0;
   item.targetLevel = Number(document.getElementById("invEditTarget").value) || 0;
   syncInventoryToShopping(item);
-  persist();
+  persist({table:"inventory", op:"upsert", item});
   invEditOverlay.classList.remove("open");
   renderInventory();
   renderShopping();
@@ -3710,7 +3840,7 @@ document.getElementById("btnSaveInvEdit").addEventListener("click", ()=>{
 document.getElementById("btnDeleteInvEdit").addEventListener("click", ()=>{
   const id = document.getElementById("invEditId").value;
   data.inventory = data.inventory.filter(x=>x.id!==id);
-  persist();
+  persist({table:"inventory", op:"delete", id});
   invEditOverlay.classList.remove("open");
   renderInventory();
   renderDashboard();
@@ -3744,7 +3874,7 @@ function medSummary(med){
 
 // Protokolliert eine Änderung am Medikamentenplan (Datum, Uhrzeit, alter/neuer Wert).
 function logMedChange(med, field, oldVal, newVal, action){
-  data.medicationLog.push({
+  const logEntry = {
     id: uid(),
     timestamp: new Date().toISOString(),
     medicationId: med.id,
@@ -3753,8 +3883,10 @@ function logMedChange(med, field, oldVal, newVal, action){
     field: field || null,
     oldValue: oldVal,
     newValue: newVal
-  });
+  };
+  data.medicationLog.push(logEntry);
   updateMedLogButtonLabel();
+  persist({table:"medicationLog", op:"upsert", item:logEntry});
 }
 
 function updateMedLogButtonLabel(){
@@ -3794,7 +3926,7 @@ function addMedication(){
   document.querySelectorAll(".medTimeCheck").forEach(cb=> cb.checked = false);
   document.querySelectorAll(".medDayCheck").forEach(cb=> cb.checked = true);
   document.getElementById("medName").focus();
-  persist();
+  persist({table:"medications", op:"upsert", item:med});
   renderMedications();
   refreshMedicationLogIfOpen();
 }
@@ -3841,7 +3973,7 @@ function makeMedicationRow(med){
       chip.querySelector("input").addEventListener("change", ()=>{
         const key = todayStrVal + "|" + slot;
         med.takenLog[key] = !med.takenLog[key];
-        persist();
+        persist({table:"medications", op:"upsert", item:med});
         renderMedications();
       });
       todayBox.appendChild(chip);
@@ -3859,7 +3991,7 @@ function makeMedicationRow(med){
     e.stopPropagation();
     logMedChange(med, "Eintrag", medSummary(med), "–", "deleted");
     data.medications = data.medications.filter(m=>m.id!==med.id);
-    persist();
+    persist({table:"medications", op:"delete", id:med.id});
     renderMedications();
     refreshMedicationLogIfOpen();
   });
@@ -3950,7 +4082,7 @@ document.getElementById("btnSaveMedicationEdit").addEventListener("click", ()=>{
 
   changes.forEach(([field, oldV, newV])=> logMedChange(med, field, oldV, newV, "updated"));
 
-  persist();
+  persist({table:"medications", op:"upsert", item:med});
   medicationEditOverlay.classList.remove("open");
   renderMedications();
   renderDashboard();
@@ -3964,7 +4096,7 @@ document.getElementById("btnDeleteMedication").addEventListener("click", ()=>{
     logMedChange(med, "Eintrag", medSummary(med), "–", "deleted");
     data.medications = data.medications.filter(m=>m.id!==id);
   }
-  persist();
+  persist({table:"medications", op:"delete", id});
   medicationEditOverlay.classList.remove("open");
   renderMedications();
   renderDashboard();
@@ -3982,8 +4114,9 @@ medicationLogOverlay.addEventListener("click",(e)=>{ if(e.target===medicationLog
 
 document.getElementById("btnClearMedicationLog").addEventListener("click", ()=>{
   if(confirm("Änderungslog wirklich vollständig löschen? Das kann nicht rückgängig gemacht werden.")){
+    const removedIds = data.medicationLog.map(l=>l.id);
     data.medicationLog = [];
-    persist();
+    persist({table:"medicationLog", op:"deleteMany", ids:removedIds});
     updateMedLogButtonLabel();
     renderMedicationLogBody();
   }
@@ -4029,7 +4162,7 @@ function addPayment(){
   const text = document.getElementById("payText").value.trim();
   const dueDate = document.getElementById("payDue").value;
   if(!text || !dueDate){ alert("Bitte Bezeichnung und Fälligkeit angeben."); return; }
-  data.payments.push({
+  const newPayment = {
     id: uid(),
     text,
     amount: Number(document.getElementById("payAmount").value) || 0,
@@ -4037,13 +4170,14 @@ function addPayment(){
     person: document.getElementById("payPerson").value.trim(),
     done: false,
     addedAt: new Date().toISOString()
-  });
+  };
+  data.payments.push(newPayment);
   document.getElementById("payText").value = "";
   document.getElementById("payAmount").value = "";
   document.getElementById("payDue").value = "";
   document.getElementById("payPerson").value = "";
   document.getElementById("payText").focus();
-  persist();
+  persist({table:"payments", op:"upsert", item:newPayment});
   renderPayments();
 }
 
@@ -4066,7 +4200,7 @@ function renderPayments(){
       const row = document.createElement("div");
       row.className = "pay-item" + (p.done?" done":"") + (overdue?" overdue":"") + (soon?" soon":"");
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=p.done;
-      chk.addEventListener("change", ()=>{ p.done = chk.checked; persist(); renderPayments(); });
+      chk.addEventListener("change", ()=>{ p.done = chk.checked; persist({table:"payments", op:"upsert", item:p}); renderPayments(); });
       const txt = document.createElement("div"); txt.className="txt"; txt.style.cursor="pointer"; txt.title="Klicken zum Bearbeiten"; txt.textContent = p.text;
       txt.addEventListener("click", ()=> openPaymentEditModal(p));
       const dueEl = document.createElement("div");
@@ -4080,7 +4214,7 @@ function renderPayments(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ data.payments = data.payments.filter(x=>x.id!==p.id); persist(); renderPayments(); });
+      del.addEventListener("click", ()=>{ data.payments = data.payments.filter(x=>x.id!==p.id); persist({table:"payments", op:"delete", id:p.id}); renderPayments(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -4094,8 +4228,9 @@ function renderPayments(){
 }
 
 document.getElementById("btnClearDonePayments").addEventListener("click", ()=>{
+  const removedIds = data.payments.filter(p=>p.done).map(p=>p.id);
   data.payments = data.payments.filter(p=>!p.done);
-  persist();
+  persist({table:"payments", op:"deleteMany", ids:removedIds});
   renderPayments();
 });
 
@@ -4123,7 +4258,7 @@ document.getElementById("btnSavePaymentEdit").addEventListener("click", ()=>{
   p.amount = Number(document.getElementById("payEditAmount").value) || 0;
   p.dueDate = dueDate;
   p.person = document.getElementById("payEditPerson").value.trim();
-  persist();
+  persist({table:"payments", op:"upsert", item:p});
   paymentEditOverlay.classList.remove("open");
   renderPayments();
   renderDashboard();
@@ -4131,7 +4266,7 @@ document.getElementById("btnSavePaymentEdit").addEventListener("click", ()=>{
 document.getElementById("btnDeletePaymentEdit").addEventListener("click", ()=>{
   const id = document.getElementById("payEditId").value;
   data.payments = data.payments.filter(x=>x.id!==id);
-  persist();
+  persist({table:"payments", op:"delete", id});
   paymentEditOverlay.classList.remove("open");
   renderPayments();
   renderDashboard();
@@ -4145,7 +4280,7 @@ function addIncomingPayment(){
   const text = document.getElementById("incPayText").value.trim();
   const dueDate = document.getElementById("incPayDue").value;
   if(!text || !dueDate){ alert("Bitte Bezeichnung und Fälligkeit angeben."); return; }
-  data.incomingPayments.push({
+  const newItem = {
     id: uid(),
     text,
     amount: Number(document.getElementById("incPayAmount").value) || 0,
@@ -4153,13 +4288,14 @@ function addIncomingPayment(){
     person: document.getElementById("incPayPerson").value.trim(),
     done: false,
     addedAt: new Date().toISOString()
-  });
+  };
+  data.incomingPayments.push(newItem);
   document.getElementById("incPayText").value = "";
   document.getElementById("incPayAmount").value = "";
   document.getElementById("incPayDue").value = "";
   document.getElementById("incPayPerson").value = "";
   document.getElementById("incPayText").focus();
-  persist();
+  persist({table:"incomingPayments", op:"upsert", item:newItem});
   renderIncomingPayments();
   renderDashboard();
 }
@@ -4183,7 +4319,7 @@ function renderIncomingPayments(){
       const row = document.createElement("div");
       row.className = "pay-item" + (p.done?" done":"") + (overdue?" overdue":"") + (soon?" soon":"");
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=p.done;
-      chk.addEventListener("change", ()=>{ p.done = chk.checked; persist(); renderIncomingPayments(); renderDashboard(); });
+      chk.addEventListener("change", ()=>{ p.done = chk.checked; persist({table:"incomingPayments", op:"upsert", item:p}); renderIncomingPayments(); renderDashboard(); });
       const txt = document.createElement("div"); txt.className="txt"; txt.textContent = p.text;
       const dueEl = document.createElement("div");
       dueEl.className = "due" + (overdue?" overdue-text":"") + (soon?" soon-text":"");
@@ -4196,7 +4332,7 @@ function renderIncomingPayments(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ data.incomingPayments = data.incomingPayments.filter(x=>x.id!==p.id); persist(); renderIncomingPayments(); renderDashboard(); });
+      del.addEventListener("click", ()=>{ data.incomingPayments = data.incomingPayments.filter(x=>x.id!==p.id); persist({table:"incomingPayments", op:"delete", id:p.id}); renderIncomingPayments(); renderDashboard(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -4210,8 +4346,9 @@ function renderIncomingPayments(){
 }
 
 document.getElementById("btnClearDoneIncomingPayments").addEventListener("click", ()=>{
+  const removedIds = data.incomingPayments.filter(p=>p.done).map(p=>p.id);
   data.incomingPayments = data.incomingPayments.filter(p=>!p.done);
-  persist();
+  persist({table:"incomingPayments", op:"deleteMany", ids:removedIds});
   renderIncomingPayments();
   renderDashboard();
 });
@@ -4223,7 +4360,7 @@ document.getElementById("voucherText").addEventListener("keydown",(e)=>{ if(e.ke
 function addVoucher(){
   const text = document.getElementById("voucherText").value.trim();
   if(!text){ alert("Bitte eine Bezeichnung angeben."); return; }
-  data.vouchers.push({
+  const newVoucher = {
     id: uid(),
     text,
     amount: Number(document.getElementById("voucherAmount").value) || 0,
@@ -4231,13 +4368,14 @@ function addVoucher(){
     person: document.getElementById("voucherPerson").value.trim(),
     redeemed: false,
     addedAt: new Date().toISOString()
-  });
+  };
+  data.vouchers.push(newVoucher);
   document.getElementById("voucherText").value = "";
   document.getElementById("voucherAmount").value = "";
   document.getElementById("voucherExpiry").value = "";
   document.getElementById("voucherPerson").value = "";
   document.getElementById("voucherText").focus();
-  persist();
+  persist({table:"vouchers", op:"upsert", item:newVoucher});
   renderVouchers();
 }
 
@@ -4261,7 +4399,7 @@ function renderVouchers(){
       row.className = "pay-item" + (v.redeemed?" done":"") + (overdue?" overdue":"") + (soon?" soon":"");
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=v.redeemed;
       chk.title = "Als eingelöst markieren";
-      chk.addEventListener("change", ()=>{ v.redeemed = chk.checked; persist(); renderVouchers(); });
+      chk.addEventListener("change", ()=>{ v.redeemed = chk.checked; persist({table:"vouchers", op:"upsert", item:v}); renderVouchers(); });
       const txt = document.createElement("div"); txt.className="txt"; txt.textContent = v.text;
       const dueEl = document.createElement("div");
       dueEl.className = "due" + (overdue?" overdue-text":"") + (soon?" soon-text":"");
@@ -4276,7 +4414,7 @@ function renderVouchers(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ data.vouchers = data.vouchers.filter(x=>x.id!==v.id); persist(); renderVouchers(); });
+      del.addEventListener("click", ()=>{ data.vouchers = data.vouchers.filter(x=>x.id!==v.id); persist({table:"vouchers", op:"delete", id:v.id}); renderVouchers(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -4290,8 +4428,9 @@ function renderVouchers(){
 }
 
 document.getElementById("btnClearRedeemedVouchers").addEventListener("click", ()=>{
+  const removedIds = data.vouchers.filter(v=>v.redeemed).map(v=>v.id);
   data.vouchers = data.vouchers.filter(v=>!v.redeemed);
-  persist();
+  persist({table:"vouchers", op:"deleteMany", ids:removedIds});
   renderVouchers();
 });
 
@@ -4302,20 +4441,21 @@ document.getElementById("msgText").addEventListener("keydown",(e)=>{ if(e.key===
 function addMessage(){
   const title = document.getElementById("msgTitle").value.trim();
   if(!title){ alert("Bitte eine Überschrift eingeben."); return; }
-  data.messages.push({
+  const newMsg = {
     id: uid(),
     title,
     text: document.getElementById("msgText").value.trim(),
     author: document.getElementById("msgAuthor").value.trim(),
     expiresAt: document.getElementById("msgExpiry").value || null,
     createdAt: new Date().toISOString()
-  });
+  };
+  data.messages.push(newMsg);
   document.getElementById("msgTitle").value = "";
   document.getElementById("msgText").value = "";
   document.getElementById("msgAuthor").value = "";
   document.getElementById("msgExpiry").value = "";
   document.getElementById("msgTitle").focus();
-  persist();
+  persist({table:"messages", op:"upsert", item:newMsg});
   renderMessages();
   renderDashboard();
 }
@@ -4352,7 +4492,7 @@ function renderMessages(){
     body.appendChild(meta);
     body.addEventListener("click", ()=> openMessageEditModal(m));
     const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
-    del.addEventListener("click", ()=>{ data.messages = data.messages.filter(x=>x.id!==m.id); persist(); renderMessages(); renderDashboard(); });
+    del.addEventListener("click", ()=>{ data.messages = data.messages.filter(x=>x.id!==m.id); persist({table:"messages", op:"delete", id:m.id}); renderMessages(); renderDashboard(); });
     row.appendChild(bar); row.appendChild(body); row.appendChild(del);
     box.appendChild(row);
   });
@@ -4381,7 +4521,7 @@ document.getElementById("btnSaveMessageEdit").addEventListener("click", ()=>{
   m.text = document.getElementById("msgEditText").value.trim();
   m.author = document.getElementById("msgEditAuthor").value.trim();
   m.expiresAt = document.getElementById("msgEditExpiry").value || null;
-  persist();
+  persist({table:"messages", op:"upsert", item:m});
   messageEditOverlay.classList.remove("open");
   renderMessages();
   renderDashboard();
@@ -4389,7 +4529,7 @@ document.getElementById("btnSaveMessageEdit").addEventListener("click", ()=>{
 document.getElementById("btnDeleteMessageEdit").addEventListener("click", ()=>{
   const id = document.getElementById("msgEditId").value;
   data.messages = data.messages.filter(x=>x.id!==id);
-  persist();
+  persist({table:"messages", op:"delete", id});
   messageEditOverlay.classList.remove("open");
   renderMessages();
   renderDashboard();
@@ -4402,17 +4542,18 @@ document.getElementById("checklistTitle").addEventListener("keydown",(e)=>{ if(e
 function addChecklist(){
   const title = document.getElementById("checklistTitle").value.trim();
   if(!title){ alert("Bitte einen Namen für die Checkliste angeben."); return; }
-  data.checklists.push({
+  const newCl = {
     id: uid(), title,
     assignee: document.getElementById("checklistAssignee").value.trim(),
     date: document.getElementById("checklistDate").value || null,
     items: [], open: true, addedAt: new Date().toISOString()
-  });
+  };
+  data.checklists.push(newCl);
   document.getElementById("checklistTitle").value = "";
   document.getElementById("checklistAssignee").value = "";
   document.getElementById("checklistDate").value = "";
   document.getElementById("checklistTitle").focus();
-  persist();
+  persist({table:"checklists", op:"upsert", item:newCl});
   renderChecklists();
   renderDashboard();
 }
@@ -4439,36 +4580,36 @@ function renderChecklists(){
     clDate.title = "Termin (optional)";
     clDate.value = cl.date || "";
     clDate.addEventListener("click", (e)=> e.stopPropagation());
-    clDate.addEventListener("change", (e)=>{ cl.date = e.target.value || null; persist(); renderChecklists(); renderDashboard(); });
+    clDate.addEventListener("change", (e)=>{ cl.date = e.target.value || null; persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
     const clAssignee = document.createElement("input"); clAssignee.type = "text"; clAssignee.className = "cl-assignee-input";
     clAssignee.placeholder = "Verantwortlich"; clAssignee.title = "Verantwortlich (optional)";
     clAssignee.value = cl.assignee || "";
     clAssignee.addEventListener("click", (e)=> e.stopPropagation());
-    clAssignee.addEventListener("change", (e)=>{ cl.assignee = e.target.value.trim(); persist(); renderChecklists(); renderDashboard(); });
+    clAssignee.addEventListener("change", (e)=>{ cl.assignee = e.target.value.trim(); persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
     const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
     del.title = "Checkliste löschen";
-    del.addEventListener("click", (e)=>{ e.stopPropagation(); data.checklists = data.checklists.filter(c=>c.id!==cl.id); persist(); renderChecklists(); renderDashboard(); });
+    del.addEventListener("click", (e)=>{ e.stopPropagation(); data.checklists = data.checklists.filter(c=>c.id!==cl.id); persist({table:"checklists", op:"delete", id:cl.id}); renderChecklists(); renderDashboard(); });
     head.appendChild(chevron); head.appendChild(title); head.appendChild(progress); head.appendChild(clAssignee); head.appendChild(clDate); head.appendChild(del);
-    head.addEventListener("click", ()=>{ cl.open = !cl.open; persist(); renderChecklists(); });
+    head.addEventListener("click", ()=>{ cl.open = !cl.open; persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); });
     card.appendChild(head);
 
     const body = document.createElement("div"); body.className = "checklist-body";
     cl.items.forEach(item=>{
       const row = document.createElement("div"); row.className = "checklist-item" + (item.done?" done":"");
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=item.done;
-      chk.addEventListener("change", ()=>{ item.done = chk.checked; persist(); renderChecklists(); renderDashboard(); });
+      chk.addEventListener("change", ()=>{ item.done = chk.checked; persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
       const txt = document.createElement("div"); txt.className="txt"; txt.textContent = item.text;
       const itemAssignee = document.createElement("input"); itemAssignee.type = "text"; itemAssignee.className = "item-assignee-input";
       itemAssignee.placeholder = "Verantwortlich"; itemAssignee.title = "Verantwortlich (optional)";
       itemAssignee.value = item.assignee || "";
-      itemAssignee.addEventListener("change", (e)=>{ item.assignee = e.target.value.trim(); persist(); renderChecklists(); renderDashboard(); });
+      itemAssignee.addEventListener("change", (e)=>{ item.assignee = e.target.value.trim(); persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
       const itemOverdue = item.date && !item.done && item.date < todayStrVal;
       const itemDate = document.createElement("input"); itemDate.type = "date"; itemDate.className = "item-date-input" + (itemOverdue ? " overdue" : "");
       itemDate.title = "Termin (optional)";
       itemDate.value = item.date || "";
-      itemDate.addEventListener("change", (e)=>{ item.date = e.target.value || null; persist(); renderChecklists(); renderDashboard(); });
+      itemDate.addEventListener("change", (e)=>{ item.date = e.target.value || null; persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
       const idel = document.createElement("button"); idel.className="btn-icon"; idel.textContent="✕";
-      idel.addEventListener("click", ()=>{ cl.items = cl.items.filter(i=>i.id!==item.id); persist(); renderChecklists(); renderDashboard(); });
+      idel.addEventListener("click", ()=>{ cl.items = cl.items.filter(i=>i.id!==item.id); persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
       row.appendChild(chk); row.appendChild(txt); row.appendChild(itemAssignee); row.appendChild(itemDate); row.appendChild(idel);
       body.appendChild(row);
     });
@@ -4485,7 +4626,7 @@ function renderChecklists(){
       input.value = "";
       inputAssignee.value = "";
       inputDate.value = "";
-      persist();
+      persist({table:"checklists", op:"upsert", item:cl});
       renderChecklists();
       renderDashboard();
     };
@@ -4514,7 +4655,7 @@ function populateWhereisAssetSelect(){
 function addWhereis(){
   const name = document.getElementById("whereName").value.trim();
   if(!name){ alert("Bitte angeben, worum es sich handelt."); return; }
-  data.whereis.push({
+  const newEntry = {
     id: uid(),
     name,
     category: document.getElementById("whereCategory").value.trim(),
@@ -4523,7 +4664,8 @@ function addWhereis(){
     assetId: document.getElementById("whereAssetLink").value || null,
     notes: document.getElementById("whereNotes").value.trim(),
     addedAt: new Date().toISOString()
-  });
+  };
+  data.whereis.push(newEntry);
   document.getElementById("whereName").value = "";
   document.getElementById("whereCategory").value = "";
   document.getElementById("whereLocation").value = "";
@@ -4531,7 +4673,7 @@ function addWhereis(){
   document.getElementById("whereAssetLink").value = "";
   document.getElementById("whereNotes").value = "";
   document.getElementById("whereName").focus();
-  persist();
+  persist({table:"whereis", op:"upsert", item:newEntry});
   renderWhereis();
   renderDashboard();
 }
@@ -4548,7 +4690,7 @@ function renderWhereis(){
     const row = document.createElement("div"); row.className = "pay-item" + (w.pinned ? " pinned-where" : "");
     const pin = document.createElement("button"); pin.className = "btn-icon"; pin.textContent = w.pinned ? "📌" : "📍";
     pin.title = w.pinned ? "Aus 'Diese Woche' entfernen" : "Für 'Diese Woche' markieren";
-    pin.addEventListener("click", ()=>{ w.pinned = !w.pinned; persist(); renderWhereis(); renderDashboard(); });
+    pin.addEventListener("click", ()=>{ w.pinned = !w.pinned; persist({table:"whereis", op:"upsert", item:w}); renderWhereis(); renderDashboard(); });
     row.appendChild(pin);
     const info = document.createElement("div"); info.className = "txt"; info.style.cursor = "pointer";
     info.title = "Klicken zum Bearbeiten";
@@ -4565,7 +4707,7 @@ function renderWhereis(){
       row.appendChild(a);
     }
     const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
-    del.addEventListener("click", ()=>{ data.whereis = data.whereis.filter(x=>x.id!==w.id); persist(); renderWhereis(); renderDashboard(); });
+    del.addEventListener("click", ()=>{ data.whereis = data.whereis.filter(x=>x.id!==w.id); persist({table:"whereis", op:"delete", id:w.id}); renderWhereis(); renderDashboard(); });
     row.appendChild(del);
     box.appendChild(row);
   });
@@ -4608,7 +4750,7 @@ document.getElementById("btnSaveWhereisEdit").addEventListener("click", ()=>{
   w.link = document.getElementById("whereEditLink").value.trim();
   w.assetId = document.getElementById("whereEditAssetLink").value || null;
   w.notes = document.getElementById("whereEditNotes").value.trim();
-  persist();
+  persist({table:"whereis", op:"upsert", item:w});
   whereisEditOverlay.classList.remove("open");
   renderWhereis();
   renderDashboard();
@@ -4616,7 +4758,7 @@ document.getElementById("btnSaveWhereisEdit").addEventListener("click", ()=>{
 document.getElementById("btnDeleteWhereisEdit").addEventListener("click", ()=>{
   const id = document.getElementById("whereEditId").value;
   data.whereis = data.whereis.filter(x=>x.id!==id);
-  persist();
+  persist({table:"whereis", op:"delete", id});
   whereisEditOverlay.classList.remove("open");
   renderWhereis();
   renderDashboard();
@@ -4628,18 +4770,19 @@ document.getElementById("btnAddLink").addEventListener("click", ()=>{
   let url = document.getElementById("linkUrl").value.trim();
   if(!title || !url){ alert("Bitte Titel und URL angeben."); return; }
   if(!/^https?:\/\//i.test(url)) url = "https://" + url;
-  data.links.push({
+  const newLink = {
     id: uid(), title, url,
     category: document.getElementById("linkCategory").value.trim() || "Sonstiges",
     notes: document.getElementById("linkNotes").value.trim(),
     pinned: false,
     addedAt: new Date().toISOString()
-  });
+  };
+  data.links.push(newLink);
   document.getElementById("linkTitle").value = "";
   document.getElementById("linkUrl").value = "";
   document.getElementById("linkCategory").value = "";
   document.getElementById("linkNotes").value = "";
-  persist();
+  persist({table:"links", op:"upsert", item:newLink});
   renderLinks();
   renderDashboard();
 });
@@ -4662,7 +4805,7 @@ function renderLinks(){
       const row = document.createElement("div"); row.className = "pay-item" + (l.pinned ? " pinned-where" : "");
       const pin = document.createElement("button"); pin.className = "btn-icon"; pin.textContent = l.pinned ? "📌" : "📍";
       pin.title = l.pinned ? "Aus 'Diese Woche' entfernen" : "Für 'Diese Woche' markieren";
-      pin.addEventListener("click", ()=>{ l.pinned = !l.pinned; persist(); renderLinks(); renderDashboard(); });
+      pin.addEventListener("click", ()=>{ l.pinned = !l.pinned; persist({table:"links", op:"upsert", item:l}); renderLinks(); renderDashboard(); });
       row.appendChild(pin);
       const info = document.createElement("div"); info.className = "txt"; info.style.cursor = "pointer";
       info.title = "Klicken zum Bearbeiten";
@@ -4673,7 +4816,7 @@ function renderLinks(){
       a.textContent = "🔗 Öffnen"; a.style.cssText = "font-size:12px;font-weight:700;color:var(--blue);white-space:nowrap;";
       row.appendChild(a);
       const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
-      del.addEventListener("click", ()=>{ data.links = data.links.filter(x=>x.id!==l.id); persist(); renderLinks(); renderDashboard(); });
+      del.addEventListener("click", ()=>{ data.links = data.links.filter(x=>x.id!==l.id); persist({table:"links", op:"delete", id:l.id}); renderLinks(); renderDashboard(); });
       row.appendChild(del);
       block.appendChild(row);
     });
@@ -4706,7 +4849,7 @@ document.getElementById("btnSaveLink").addEventListener("click", ()=>{
   l.url = url;
   l.category = document.getElementById("linkEditCategory").value.trim() || "Sonstiges";
   l.notes = document.getElementById("linkEditNotes").value.trim();
-  persist();
+  persist({table:"links", op:"upsert", item:l});
   linkEditOverlay.classList.remove("open");
   renderLinks();
   renderDashboard();
@@ -4714,7 +4857,7 @@ document.getElementById("btnSaveLink").addEventListener("click", ()=>{
 document.getElementById("btnDeleteLink").addEventListener("click", ()=>{
   const id = document.getElementById("linkEditId").value;
   data.links = data.links.filter(x=>x.id!==id);
-  persist();
+  persist({table:"links", op:"delete", id});
   linkEditOverlay.classList.remove("open");
   renderLinks();
   renderDashboard();
@@ -4757,7 +4900,10 @@ function ensureResourcesMigrated(){
       changed = true;
     }
   });
-  if(changed) persist();
+  if(changed){
+    persist();
+    if(supabaseClient && currentUser){ syncAllToSupabase(); } // einmalige Migration betrifft resources + roomBookings zusammen
+  }
 }
 
 function toggleRbModeFields(mode){
@@ -4780,16 +4926,17 @@ document.getElementById("rbEditMode").addEventListener("change", (e)=> toggleRbE
 document.getElementById("btnAddResource").addEventListener("click", ()=>{
   const name = document.getElementById("resName").value.trim();
   if(!name){ alert("Bitte einen Namen für die Ressource angeben."); return; }
-  data.resources.push({
+  const newRes = {
     id: uid(), name,
     category: document.getElementById("resCategory").value.trim() || "Sonstiges",
     notes: document.getElementById("resNotes").value.trim(),
     addedAt: new Date().toISOString()
-  });
+  };
+  data.resources.push(newRes);
   document.getElementById("resName").value = "";
   document.getElementById("resCategory").value = "";
   document.getElementById("resNotes").value = "";
-  persist();
+  persist({table:"resources", op:"upsert", item:newRes});
   renderResourceList();
   renderDashboard();
 });
@@ -4832,6 +4979,7 @@ function renderResourceList(){
 function deleteResource(id){
   const bookingCount = data.roomBookings.filter(b=>b.resourceId===id).length;
   if(bookingCount>0 && !confirm(`Diese Ressource hat ${bookingCount} Buchung(en). Ressource inkl. aller Buchungen wirklich löschen?`)) return;
+  const removedBookingIds = data.roomBookings.filter(b=>b.resourceId===id).map(b=>b.id);
   data.resources = data.resources.filter(r=>r.id!==id);
   data.roomBookings = data.roomBookings.filter(b=>b.resourceId!==id);
   if(rbSelectedResourceId===id){
@@ -4839,7 +4987,8 @@ function deleteResource(id){
     document.getElementById("rbBookingDetailView").style.display = "none";
     document.getElementById("rbResourceManagerView").style.display = "block";
   }
-  persist();
+  persist({table:"resources", op:"delete", id});
+  if(removedBookingIds.length) persist({table:"roomBookings", op:"deleteMany", ids:removedBookingIds});
   renderResourceList();
   renderDashboard();
 }
@@ -4865,7 +5014,7 @@ document.getElementById("btnSaveResource").addEventListener("click", ()=>{
   r.name = name;
   r.category = document.getElementById("resEditCategory").value.trim() || "Sonstiges";
   r.notes = document.getElementById("resEditNotes").value.trim();
-  persist();
+  persist({table:"resources", op:"upsert", item:r});
   resourceEditOverlay.classList.remove("open");
   renderResourceList();
   if(rbSelectedResourceId===id){
@@ -4922,7 +5071,7 @@ document.getElementById("btnAddRoomBooking").addEventListener("click", ()=>{
   document.getElementById("rbStart").value = "";
   document.getElementById("rbEnd").value = "";
   document.getElementById("rbNotes").value = "";
-  persist();
+  persist({table:"roomBookings", op:"upsert", item:booking});
   renderRoomBookings();
   renderResourceList();
   renderDashboard();
@@ -5023,7 +5172,7 @@ document.getElementById("btnSaveRoomBooking").addEventListener("click", ()=>{
   b.notes = document.getElementById("rbEditNotes").value.trim();
   const [start,end] = rbRange(b);
   if(mode==="free" && (!start || !end || start>=end)){ alert("Bitte eine gültige Zeitspanne angeben (Ende nach Beginn)."); return; }
-  persist();
+  persist({table:"roomBookings", op:"upsert", item:b});
   rbEditOverlay.classList.remove("open");
   renderRoomBookings();
   renderResourceList();
@@ -5032,7 +5181,7 @@ document.getElementById("btnSaveRoomBooking").addEventListener("click", ()=>{
 document.getElementById("btnDeleteRoomBooking").addEventListener("click", ()=>{
   const id = document.getElementById("rbEditId").value;
   data.roomBookings = data.roomBookings.filter(x=>x.id!==id);
-  persist();
+  persist({table:"roomBookings", op:"delete", id});
   rbEditOverlay.classList.remove("open");
   renderRoomBookings();
   renderResourceList();
@@ -5106,7 +5255,7 @@ function addCity(city){
   if(data.cities.some(c=> Math.abs(c.lat-city.lat)<0.01 && Math.abs(c.lon-city.lon)<0.01)) return;
   city.id = uid();
   data.cities.push(city);
-  persist();
+  persist({table:"cities", op:"upsert", item:city});
   renderWeather();
   fetchWeatherFor(city.id);
 }
@@ -5123,11 +5272,11 @@ function renderWeather(){
     const actions = document.createElement("div"); actions.className="card-actions";
     const pin = document.createElement("button"); pin.className="btn-icon"; pin.textContent = city.pinned ? "📌" : "📍";
     pin.title = city.pinned ? "Aus 'Diese Woche' entfernen" : "Für Wochenverlauf in 'Diese Woche' markieren";
-    pin.addEventListener("click", (e)=>{ e.stopPropagation(); city.pinned = !city.pinned; persist(); renderWeather(); renderDashboard(); });
+    pin.addEventListener("click", (e)=>{ e.stopPropagation(); city.pinned = !city.pinned; persist({table:"cities", op:"upsert", item:city}); renderWeather(); renderDashboard(); });
     const refresh = document.createElement("button"); refresh.className="btn-icon"; refresh.textContent="⟳"; refresh.title="Aktualisieren";
     refresh.addEventListener("click", (e)=>{ e.stopPropagation(); fetchWeatherFor(city.id); });
     const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕"; del.title="Entfernen";
-    del.addEventListener("click", (e)=>{ e.stopPropagation(); data.cities = data.cities.filter(c=>c.id!==city.id); persist(); renderWeather(); renderDashboard(); });
+    del.addEventListener("click", (e)=>{ e.stopPropagation(); data.cities = data.cities.filter(c=>c.id!==city.id); persist({table:"cities", op:"delete", id:city.id}); renderWeather(); renderDashboard(); });
     actions.appendChild(pin); actions.appendChild(refresh); actions.appendChild(del);
     card.appendChild(actions);
     card.addEventListener("click", ()=> openForecastModal(city.id));
@@ -5175,7 +5324,7 @@ async function fetchWeatherFor(cityId){
       temp: c.temperature_2m, feels: c.apparent_temperature, humidity: c.relative_humidity_2m,
       wind: c.wind_speed_10m, code: c.weather_code, fetchedAt: Date.now(), daily
     };
-    persist();
+    persist({table:"cities", op:"upsert", item:city});
     renderWeather();
     renderDashboard();
     if(forecastOpenCityId === cityId) renderForecastBody(city);
@@ -5511,7 +5660,7 @@ document.getElementById("btnSaveContract").addEventListener("click", ()=>{
     payload.id = uid();
     data.contracts.push(payload);
   }
-  persist();
+  persist({table:"contracts", op:"upsert", item: data.contracts.find(c=>c.id===payload.id)});
   contractOverlay.classList.remove("open");
   renderContracts();
   renderDashboard();
@@ -5519,7 +5668,7 @@ document.getElementById("btnSaveContract").addEventListener("click", ()=>{
 document.getElementById("btnDeleteContract").addEventListener("click", ()=>{
   const id = document.getElementById("contractId").value;
   data.contracts = data.contracts.filter(c=>c.id!==id);
-  persist();
+  persist({table:"contracts", op:"delete", id});
   contractOverlay.classList.remove("open");
   renderContracts();
   renderDashboard();
@@ -5597,7 +5746,7 @@ document.getElementById("btnSaveAsset").addEventListener("click", ()=>{
     payload.id = uid();
     data.assets.push(payload);
   }
-  persist();
+  persist({table:"assets", op:"upsert", item: data.assets.find(a=>a.id===payload.id)});
   assetOverlay.classList.remove("open");
   renderAssets();
   renderDashboard();
@@ -5605,7 +5754,7 @@ document.getElementById("btnSaveAsset").addEventListener("click", ()=>{
 document.getElementById("btnDeleteAsset").addEventListener("click", ()=>{
   const id = document.getElementById("assetId").value;
   data.assets = data.assets.filter(a=>a.id!==id);
-  persist();
+  persist({table:"assets", op:"delete", id});
   assetOverlay.classList.remove("open");
   renderAssets();
   renderDashboard();
@@ -5749,7 +5898,7 @@ document.getElementById("btnSaveIncome").addEventListener("click", ()=>{
     payload.id = uid();
     data.income.push(payload);
   }
-  persist();
+  persist({table:"income", op:"upsert", item: data.income.find(i=>i.id===payload.id)});
   incomeOverlay.classList.remove("open");
   renderIncome();
   renderDashboard();
@@ -5757,7 +5906,7 @@ document.getElementById("btnSaveIncome").addEventListener("click", ()=>{
 document.getElementById("btnDeleteIncome").addEventListener("click", ()=>{
   const id = document.getElementById("incomeId").value;
   data.income = data.income.filter(i=>i.id!==id);
-  persist();
+  persist({table:"income", op:"delete", id});
   incomeOverlay.classList.remove("open");
   renderIncome();
   renderDashboard();
@@ -5858,7 +6007,7 @@ document.getElementById("btnSaveContact").addEventListener("click", ()=>{
     payload.addedAt = new Date().toISOString();
     data.contacts.push(payload);
   }
-  persist();
+  persist({table:"contacts", op:"upsert", item: data.contacts.find(c=>c.id===payload.id)});
   contactOverlay.classList.remove("open");
   renderContactsList();
   renderDashboard();
@@ -5867,7 +6016,7 @@ document.getElementById("btnSaveContact").addEventListener("click", ()=>{
 document.getElementById("btnDeleteContact").addEventListener("click", ()=>{
   const id = document.getElementById("contactId").value;
   data.contacts = data.contacts.filter(c=>c.id!==id);
-  persist();
+  persist({table:"contacts", op:"delete", id});
   contactOverlay.classList.remove("open");
   renderContactsList();
   renderDashboard();
@@ -5887,7 +6036,7 @@ function makeContactCard(c){
   card.querySelector(".contact-pin").addEventListener("click", (e)=>{
     e.stopPropagation();
     c.pinned = !c.pinned;
-    persist();
+    persist({table:"contacts", op:"upsert", item:c});
     renderContactsList();
     renderDashboard();
   });
@@ -6448,7 +6597,7 @@ function saveDashboardOrder(){
   const grid = document.querySelector(".dash-grid");
   ensureDashboardSettings();
   data.dashboardSettings.order = Array.from(grid.querySelectorAll(".dash-card")).map(c=>c.dataset.cardId);
-  persist();
+  persist({op:"settings"});
 }
 
 // Verdrahtet Drag&Drop sowie Auf-/Zuklappen für eine einzelne Kachel.
@@ -6492,7 +6641,7 @@ function wireCardInteractions(card){
       const collapsed = card.classList.toggle("collapsed");
       ensureDashboardSettings();
       data.dashboardSettings.collapsed[card.dataset.cardId] = collapsed;
-      persist();
+      persist({op:"settings"});
     });
   }
 }
@@ -6604,7 +6753,7 @@ function renderMedicationPersonCard(key, slug, weekDates, todayStrVal){
           chip.innerHTML = `<input type="checkbox" ${taken?"checked":""}> ${slotInfo.emoji} ${slotInfo.label}`;
           chip.querySelector("input").addEventListener("change", ()=>{
             med.takenLog[logKey] = !med.takenLog[logKey];
-            persist();
+            persist({table:"medications", op:"upsert", item:med});
             renderMedications();
             renderDashboard();
           });
