@@ -5258,11 +5258,25 @@ document.getElementById("chatInput").addEventListener("keydown",(e)=>{ if(e.key=
 // Benachrichtigungston bei neuen Chat-Nachrichten: synthetisch erzeugt (kein externer
 // Datei-Import nötig), spielt einen kurzen freundlichen Zweiklang.
 let audioCtx = null;
+
+// Browser lassen Web-Audio nur "richtig scharf" laufen, wenn der Kontext im Zusammenhang mit
+// einer echten Nutzer-Interaktion angelegt/aktiviert wurde - eine eingehende Chat-Nachricht ist
+// dafür zu spät (Netzwerk-Ereignis, kein Klick). Deshalb hier schon bei der allerersten
+// Berührung/Klick auf die Seite vorbereiten, lange bevor der erste Ton wirklich gebraucht wird.
+function primeAudioContext(){
+  if(!audioCtx){
+    try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return; }
+  }
+  if(audioCtx.state === "suspended"){ audioCtx.resume().catch(()=>{}); }
+}
+["click","touchstart","keydown"].forEach(evt=> document.addEventListener(evt, primeAudioContext, { once:true, passive:true }));
+
 function isChatSoundMuted(){ return localStorage.getItem("chatSoundMuted") === "1"; }
 function playChatNotificationSound(){
   if(isChatSoundMuted()) return;
   try{
     if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === "suspended"){ audioCtx.resume().catch(()=>{}); }
     const now = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
