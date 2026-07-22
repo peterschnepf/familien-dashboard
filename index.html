@@ -1238,7 +1238,8 @@ footer.hint a{color:var(--blue);}
     <!-- FAMILY CHAT -->
     <section class="view" id="view-familyChat">
       <div class="panel" style="padding:16px;display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:400px;">
-        <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;">
+          <button class="btn btn-secondary" id="btnChatRename" title="Deinen Namen im Chat ändern">✏️ Namen ändern</button>
           <button class="btn btn-secondary" id="btnChatMute" title="Benachrichtigungston ein-/ausschalten">🔔 Ton an</button>
         </div>
         <div id="chatMessagesBody" class="chat-messages"></div>
@@ -2766,7 +2767,7 @@ async function renderAttachmentField(containerId, item, table, onChange){
   const box = document.getElementById(containerId);
   if(!box) return;
   if(!SUPABASE_CONFIGURED){
-    box.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">PDF-Anhänge benötigen die Cloud-Anbindung (Supabase).</div>';
+    box.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);">Datei-Anhänge benötigen die Cloud-Anbindung (Supabase).</div>';
     return;
   }
   if(item.attachmentPath){
@@ -2788,15 +2789,15 @@ async function renderAttachmentField(containerId, item, table, onChange){
     });
   } else {
     box.innerHTML = `
-      <input type="file" id="${containerId}Input" accept="application/pdf" style="display:none;">
-      <button type="button" class="btn btn-secondary" id="${containerId}Btn">📎 PDF hochladen</button>
+      <input type="file" id="${containerId}Input" style="display:none;">
+      <button type="button" class="btn btn-secondary" id="${containerId}Btn">📎 Datei hochladen</button>
       <span id="${containerId}Status" style="font-size:12px;color:var(--text-secondary);margin-left:8px;"></span>`;
     const fileInput = document.getElementById(containerId+"Input");
     document.getElementById(containerId+"Btn").addEventListener("click", ()=> fileInput.click());
     fileInput.addEventListener("change", async ()=>{
       const file = fileInput.files[0];
       if(!file) return;
-      if(!item.id){ alert("Bitte den Eintrag zuerst speichern, dann kann eine PDF angehängt werden."); return; }
+      if(!item.id){ alert("Bitte den Eintrag zuerst speichern, dann kann eine Datei angehängt werden."); return; }
       const statusEl = document.getElementById(containerId+"Status");
       statusEl.textContent = "Wird hochgeladen …";
       try{
@@ -2819,11 +2820,7 @@ function getChatSenderName(){
   }
   return localStorage.getItem("chatDisplayName") || null;
 }
-async function ensureChatDisplayName(){
-  let name = getChatSenderName();
-  if(name) return name;
-  name = prompt("Wie sollen wir dich im Familienchat nennen? (einmalig, dauerhaft mit deinem Konto verknüpft)");
-  if(!name || !name.trim()) return null;
+async function setChatDisplayName(name){
   name = name.trim();
   if(currentUser && supabaseClient){
     try{
@@ -2835,6 +2832,13 @@ async function ensureChatDisplayName(){
     localStorage.setItem("chatDisplayName", name);
   }
   return name;
+}
+async function ensureChatDisplayName(){
+  let name = getChatSenderName();
+  if(name) return name;
+  name = prompt("Wie sollen wir dich im Familienchat nennen? (einmalig, dauerhaft mit deinem Konto verknüpft)");
+  if(!name || !name.trim()) return null;
+  return await setChatDisplayName(name);
 }
 
 document.getElementById("btnFullResync").addEventListener("click", ()=>{
@@ -4451,7 +4455,7 @@ function renderPayments(){
       row.className = "pay-item" + (p.done?" done":"") + (overdue?" overdue":"") + (soon?" soon":"");
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=p.done;
       chk.addEventListener("change", ()=>{ p.done = chk.checked; persist({table:"payments", op:"upsert", item:p}); renderPayments(); });
-      const txt = document.createElement("div"); txt.className="txt"; txt.style.cursor="pointer"; txt.title="Klicken zum Bearbeiten"; txt.textContent = p.text;
+      const txt = document.createElement("div"); txt.className="txt"; txt.style.cursor="pointer"; txt.title="Klicken zum Bearbeiten"; txt.textContent = (p.attachmentPath ? "📎 " : "") + p.text;
       txt.addEventListener("click", ()=> openPaymentEditModal(p));
       const dueEl = document.createElement("div");
       dueEl.className = "due" + (overdue?" overdue-text":"") + (soon?" soon-text":"");
@@ -4464,7 +4468,7 @@ function renderPayments(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ data.payments = data.payments.filter(x=>x.id!==p.id); persist({table:"payments", op:"delete", id:p.id}); renderPayments(); });
+      del.addEventListener("click", ()=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); data.payments = data.payments.filter(x=>x.id!==p.id); persist({table:"payments", op:"delete", id:p.id}); renderPayments(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -4478,7 +4482,9 @@ function renderPayments(){
 }
 
 document.getElementById("btnClearDonePayments").addEventListener("click", ()=>{
-  const removedIds = data.payments.filter(p=>p.done).map(p=>p.id);
+  const removed = data.payments.filter(p=>p.done);
+  removed.forEach(p=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); });
+  const removedIds = removed.map(p=>p.id);
   data.payments = data.payments.filter(p=>!p.done);
   persist({table:"payments", op:"deleteMany", ids:removedIds});
   renderPayments();
@@ -4516,6 +4522,8 @@ document.getElementById("btnSavePaymentEdit").addEventListener("click", ()=>{
 });
 document.getElementById("btnDeletePaymentEdit").addEventListener("click", ()=>{
   const id = document.getElementById("payEditId").value;
+  const p = data.payments.find(x=>x.id===id);
+  if(p && p.attachmentPath) deleteAttachment(p.attachmentPath);
   data.payments = data.payments.filter(x=>x.id!==id);
   persist({table:"payments", op:"delete", id});
   paymentEditOverlay.classList.remove("open");
@@ -4571,7 +4579,7 @@ function renderIncomingPayments(){
       row.className = "pay-item" + (p.done?" done":"") + (overdue?" overdue":"") + (soon?" soon":"");
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=p.done;
       chk.addEventListener("change", ()=>{ p.done = chk.checked; persist({table:"incomingPayments", op:"upsert", item:p}); renderIncomingPayments(); renderDashboard(); });
-      const txt = document.createElement("div"); txt.className="txt"; txt.textContent = p.text;
+      const txt = document.createElement("div"); txt.className="txt"; txt.textContent = (p.attachmentPath ? "📎 " : "") + p.text;
       txt.style.cursor = "pointer";
       txt.title = "Klicken zum Bearbeiten";
       txt.addEventListener("click", ()=> openIncomingPaymentEditModal(p));
@@ -4586,7 +4594,7 @@ function renderIncomingPayments(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ data.incomingPayments = data.incomingPayments.filter(x=>x.id!==p.id); persist({table:"incomingPayments", op:"delete", id:p.id}); renderIncomingPayments(); renderDashboard(); });
+      del.addEventListener("click", ()=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); data.incomingPayments = data.incomingPayments.filter(x=>x.id!==p.id); persist({table:"incomingPayments", op:"delete", id:p.id}); renderIncomingPayments(); renderDashboard(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -4600,7 +4608,9 @@ function renderIncomingPayments(){
 }
 
 document.getElementById("btnClearDoneIncomingPayments").addEventListener("click", ()=>{
-  const removedIds = data.incomingPayments.filter(p=>p.done).map(p=>p.id);
+  const removed = data.incomingPayments.filter(p=>p.done);
+  removed.forEach(p=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); });
+  const removedIds = removed.map(p=>p.id);
   data.incomingPayments = data.incomingPayments.filter(p=>!p.done);
   persist({table:"incomingPayments", op:"deleteMany", ids:removedIds});
   renderIncomingPayments();
@@ -4639,6 +4649,8 @@ document.getElementById("btnSaveIncomingPaymentEdit").addEventListener("click", 
 });
 document.getElementById("btnDeleteIncomingPaymentEdit").addEventListener("click", ()=>{
   const id = document.getElementById("incPayEditId").value;
+  const p = data.incomingPayments.find(x=>x.id===id);
+  if(p && p.attachmentPath) deleteAttachment(p.attachmentPath);
   data.incomingPayments = data.incomingPayments.filter(x=>x.id!==id);
   persist({table:"incomingPayments", op:"delete", id});
   incomingPaymentEditOverlay.classList.remove("open");
@@ -4693,7 +4705,7 @@ function renderVouchers(){
       const chk = document.createElement("input"); chk.type="checkbox"; chk.className="chk"; chk.checked=v.redeemed;
       chk.title = "Als eingelöst markieren";
       chk.addEventListener("change", ()=>{ v.redeemed = chk.checked; persist({table:"vouchers", op:"upsert", item:v}); renderVouchers(); });
-      const txt = document.createElement("div"); txt.className="txt"; txt.textContent = v.text;
+      const txt = document.createElement("div"); txt.className="txt"; txt.textContent = (v.attachmentPath ? "📎 " : "") + v.text;
       txt.style.cursor = "pointer";
       txt.title = "Klicken zum Bearbeiten";
       txt.addEventListener("click", ()=> openVoucherEditModal(v));
@@ -4710,7 +4722,7 @@ function renderVouchers(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ data.vouchers = data.vouchers.filter(x=>x.id!==v.id); persist({table:"vouchers", op:"delete", id:v.id}); renderVouchers(); });
+      del.addEventListener("click", ()=>{ if(v.attachmentPath) deleteAttachment(v.attachmentPath); data.vouchers = data.vouchers.filter(x=>x.id!==v.id); persist({table:"vouchers", op:"delete", id:v.id}); renderVouchers(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -4724,7 +4736,9 @@ function renderVouchers(){
 }
 
 document.getElementById("btnClearRedeemedVouchers").addEventListener("click", ()=>{
-  const removedIds = data.vouchers.filter(v=>v.redeemed).map(v=>v.id);
+  const removed = data.vouchers.filter(v=>v.redeemed);
+  removed.forEach(v=>{ if(v.attachmentPath) deleteAttachment(v.attachmentPath); });
+  const removedIds = removed.map(v=>v.id);
   data.vouchers = data.vouchers.filter(v=>!v.redeemed);
   persist({table:"vouchers", op:"deleteMany", ids:removedIds});
   renderVouchers();
@@ -4760,6 +4774,8 @@ document.getElementById("btnSaveVoucherEdit").addEventListener("click", ()=>{
 });
 document.getElementById("btnDeleteVoucherEdit").addEventListener("click", ()=>{
   const id = document.getElementById("voucherEditId").value;
+  const v = data.vouchers.find(x=>x.id===id);
+  if(v && v.attachmentPath) deleteAttachment(v.attachmentPath);
   data.vouchers = data.vouchers.filter(x=>x.id!==id);
   persist({table:"vouchers", op:"delete", id});
   voucherEditOverlay.classList.remove("open");
@@ -5010,6 +5026,31 @@ function addWhereis(){
   renderDashboard();
 }
 
+function makeWhereisRow(w){
+  const row = document.createElement("div"); row.className = "pay-item" + (w.pinned ? " pinned-where" : "");
+  const pin = document.createElement("button"); pin.className = "btn-icon"; pin.textContent = w.pinned ? "📌" : "📍";
+  pin.title = w.pinned ? "Aus 'Diese Woche' entfernen" : "Für 'Diese Woche' markieren";
+  pin.addEventListener("click", ()=>{ w.pinned = !w.pinned; persist({table:"whereis", op:"upsert", item:w}); renderWhereis(); renderDashboard(); });
+  row.appendChild(pin);
+  const info = document.createElement("div"); info.className = "txt"; info.style.cursor = "pointer";
+  info.title = "Klicken zum Bearbeiten";
+  const linkedAsset = w.assetId ? data.assets.find(a=>a.id===w.assetId) : null;
+  info.innerHTML = `<strong>${w.attachmentPath ? "📎 " : ""}${escapeHtml(w.name)}</strong> · ${escapeHtml(w.location||"–")}` +
+    (linkedAsset ? ` · 🔗 ${escapeHtml(linkedAsset.name)}` : "") +
+    (w.notes ? ` · ${escapeHtml(w.notes)}` : "");
+  info.addEventListener("click", ()=> openWhereisEditModal(w));
+  row.appendChild(info);
+  if(w.link){
+    const a = document.createElement("a"); a.href = w.link; a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.textContent = "🔗 Link öffnen"; a.style.cssText = "font-size:12px;font-weight:700;color:var(--blue);white-space:nowrap;";
+    row.appendChild(a);
+  }
+  const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
+  del.addEventListener("click", ()=>{ if(w.attachmentPath) deleteAttachment(w.attachmentPath); data.whereis = data.whereis.filter(x=>x.id!==w.id); persist({table:"whereis", op:"delete", id:w.id}); renderWhereis(); renderDashboard(); });
+  row.appendChild(del);
+  return row;
+}
+
 function renderWhereis(){
   populateWhereisAssetSelect();
   const box = document.getElementById("whereisBody");
@@ -5018,30 +5059,22 @@ function renderWhereis(){
     box.innerHTML = '<div class="shop-empty">Noch keine Einträge. Trag oben ein, wo wichtige Dinge liegen.</div>';
     return;
   }
-  data.whereis.slice().sort((a,b)=>(a.name||"").localeCompare(b.name||"")).forEach(w=>{
-    const row = document.createElement("div"); row.className = "pay-item" + (w.pinned ? " pinned-where" : "");
-    const pin = document.createElement("button"); pin.className = "btn-icon"; pin.textContent = w.pinned ? "📌" : "📍";
-    pin.title = w.pinned ? "Aus 'Diese Woche' entfernen" : "Für 'Diese Woche' markieren";
-    pin.addEventListener("click", ()=>{ w.pinned = !w.pinned; persist({table:"whereis", op:"upsert", item:w}); renderWhereis(); renderDashboard(); });
-    row.appendChild(pin);
-    const info = document.createElement("div"); info.className = "txt"; info.style.cursor = "pointer";
-    info.title = "Klicken zum Bearbeiten";
-    const linkedAsset = w.assetId ? data.assets.find(a=>a.id===w.assetId) : null;
-    info.innerHTML = `<strong>${escapeHtml(w.name)}</strong> · ${escapeHtml(w.location||"–")}` +
-      (w.category ? ` · ${escapeHtml(w.category)}` : "") +
-      (linkedAsset ? ` · 🔗 ${escapeHtml(linkedAsset.name)}` : "") +
-      (w.notes ? ` · ${escapeHtml(w.notes)}` : "");
-    info.addEventListener("click", ()=> openWhereisEditModal(w));
-    row.appendChild(info);
-    if(w.link){
-      const a = document.createElement("a"); a.href = w.link; a.target = "_blank"; a.rel = "noopener noreferrer";
-      a.textContent = "🔗 Link öffnen"; a.style.cssText = "font-size:12px;font-weight:700;color:var(--blue);white-space:nowrap;";
-      row.appendChild(a);
-    }
-    const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
-    del.addEventListener("click", ()=>{ data.whereis = data.whereis.filter(x=>x.id!==w.id); persist({table:"whereis", op:"delete", id:w.id}); renderWhereis(); renderDashboard(); });
-    row.appendChild(del);
-    box.appendChild(row);
+  const NO_CATEGORY = "Ohne Kategorie";
+  const groups = {};
+  data.whereis.forEach(w=>{
+    const key = w.category && w.category.trim() ? w.category.trim() : NO_CATEGORY;
+    (groups[key] = groups[key] || []).push(w);
+  });
+  const order = Object.keys(groups).filter(k=>k!==NO_CATEGORY).sort((a,b)=>a.localeCompare(b,"de"));
+  if(groups[NO_CATEGORY]) order.push(NO_CATEGORY);
+  order.forEach(cat=>{
+    const items = groups[cat];
+    const block = document.createElement("div"); block.className = "shop-cat";
+    const h = document.createElement("h4");
+    h.innerHTML = `${escapeHtml(cat)} <span class="count">${items.length}</span>`;
+    block.appendChild(h);
+    items.sort((a,b)=>(a.name||"").localeCompare(b.name||"")).forEach(w=> block.appendChild(makeWhereisRow(w)));
+    box.appendChild(block);
   });
 }
 
@@ -5090,6 +5123,8 @@ document.getElementById("btnSaveWhereisEdit").addEventListener("click", ()=>{
 });
 document.getElementById("btnDeleteWhereisEdit").addEventListener("click", ()=>{
   const id = document.getElementById("whereEditId").value;
+  const w = data.whereis.find(x=>x.id===id);
+  if(w && w.attachmentPath) deleteAttachment(w.attachmentPath);
   data.whereis = data.whereis.filter(x=>x.id!==id);
   persist({table:"whereis", op:"delete", id});
   whereisEditOverlay.classList.remove("open");
@@ -5252,6 +5287,15 @@ document.getElementById("btnChatMute").addEventListener("click", ()=>{
   updateChatMuteButton();
 });
 updateChatMuteButton();
+
+document.getElementById("btnChatRename").addEventListener("click", async ()=>{
+  const current = getChatSenderName() || "";
+  const name = prompt("Wie sollen wir dich im Familienchat nennen?", current);
+  if(!name || !name.trim()) return;
+  await setChatDisplayName(name);
+  renderChatMessages();
+  renderDashboard();
+});
 
 function renderChatMessages(){
   const box = document.getElementById("chatMessagesBody");
@@ -5937,7 +5981,7 @@ function makeContractRow(c){
   tr.className = "contract-row";
   tr.innerHTML = `
     <td class="name-cell">
-      <div class="main">${escapeHtml(c.name)} ${c.cancelIntent ? '<span class="cancel-flag" title="Kündigung beabsichtigt">🚩</span>' : ""}</div>
+      <div class="main">${c.attachmentPath ? "📎 " : ""}${escapeHtml(c.name)} ${c.cancelIntent ? '<span class="cancel-flag" title="Kündigung beabsichtigt">🚩</span>' : ""}</div>
       ${c.provider ? `<div class="sub">${escapeHtml(c.provider)}</div>` : ""}
     </td>
     <td><span class="cat-pill" style="background:${colorFor(c.category)}">${escapeHtml(c.category||"")}</span></td>
@@ -6095,6 +6139,8 @@ document.getElementById("btnSaveContract").addEventListener("click", ()=>{
 });
 document.getElementById("btnDeleteContract").addEventListener("click", ()=>{
   const id = document.getElementById("contractId").value;
+  const c = data.contracts.find(x=>x.id===id);
+  if(c && c.attachmentPath) deleteAttachment(c.attachmentPath);
   data.contracts = data.contracts.filter(c=>c.id!==id);
   persist({table:"contracts", op:"delete", id});
   contractOverlay.classList.remove("open");
@@ -6187,6 +6233,8 @@ document.getElementById("btnSaveAsset").addEventListener("click", ()=>{
 });
 document.getElementById("btnDeleteAsset").addEventListener("click", ()=>{
   const id = document.getElementById("assetId").value;
+  const a = data.assets.find(x=>x.id===id);
+  if(a && a.attachmentPath) deleteAttachment(a.attachmentPath);
   data.assets = data.assets.filter(a=>a.id!==id);
   persist({table:"assets", op:"delete", id});
   assetOverlay.classList.remove("open");
@@ -6202,7 +6250,7 @@ function makeAssetRow(a){
     : [a.purchaseDate ? "Kauf: "+parse(a.purchaseDate).toLocaleDateString("de-DE") : "", a.location].filter(Boolean).join(" · ");
   tr.innerHTML = `
     <td class="name-cell">
-      <div class="main">${escapeHtml(a.name)}</div>
+      <div class="main">${a.attachmentPath ? "📎 " : ""}${escapeHtml(a.name)}</div>
       <div class="sub">${escapeHtml(details)}</div>
     </td>
     <td><span class="cat-pill" style="background:${colorFor(a.assetType)}">${a.assetType==="finanzanlage"?"Finanzanlage":"Sachwert"}</span></td>
