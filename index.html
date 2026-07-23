@@ -505,6 +505,27 @@ section.view.active{display:block;}
 .chat-input-row{display:flex;gap:10px;border-top:1px solid var(--border);padding-top:12px;flex:none;}
 .chat-input-row input{flex:1;padding:10px 14px;border:1px solid var(--border-strong);border-radius:20px;font-family:inherit;font-size:14px;}
 .chat-empty{color:var(--text-secondary);font-size:13px;text-align:center;padding:20px;}
+
+/* Clock (Bahnhofsuhr-Stil) */
+.clock-face{width:min(70vw,420px);height:min(70vw,420px);filter:drop-shadow(0 4px 16px rgba(0,0,0,.18));}
+.clock-outer-ring{fill:#1a1a1a;}
+.clock-dial{fill:#fafaf8;}
+.clock-tick-major{stroke:#111;stroke-width:6;stroke-linecap:butt;}
+.clock-tick-minor{stroke:#111;stroke-width:2;}
+.clock-hour-hand{fill:#111;}
+.clock-minute-hand{fill:#111;}
+#clockHourHand, #clockMinuteHand, #clockSecondHand,
+#dashClockHourHand, #dashClockMinuteHand, #dashClockSecondHand{
+  transform-origin:150px 150px; transform-box:view-box;
+}
+.clock-second-line{stroke:#c1121f;stroke-width:2.5;}
+.clock-second-disc{fill:#c1121f;}
+.clock-center-cap{fill:#111;stroke:#fafaf8;stroke-width:2;}
+.dash-clock-face{width:100%;max-width:150px;margin:6px auto;display:block;}
+.dash-card[data-card-id="clock"]{align-self:start;height:fit-content;}
+@media print{
+  body:not(.printing-report) .clock-face{display:none;}
+}
 @media print{
   body:not(.printing-report) .tl-filter-panel{display:none !important;}
 }
@@ -677,6 +698,7 @@ footer.hint a{color:var(--blue);}
     <button class="tab-btn" data-tab="whereis">🔎 Wo ist</button>
     <button class="tab-btn" data-tab="links">🔗 Links</button>
     <button class="tab-btn" data-tab="familyChat">💬 Familienchat</button>
+    <button class="tab-btn" data-tab="clock">🕐 Uhr</button>
     <button class="tab-btn" data-tab="birthdaysList">🎂 Geburtstage</button>
     <button class="tab-btn" data-tab="termineListe">🗒️ Terminliste</button>
     <button class="tab-btn" data-tab="roomBooking">📋 Belegungsplan</button>
@@ -875,6 +897,28 @@ footer.hint a{color:var(--blue);}
           </div>
           <div class="dash-card-body">
             <div id="dashChat"></div>
+          </div>
+        </div>
+        <div class="dash-card" data-card-id="clock">
+          <div class="dash-card-header">
+            <span class="dash-drag-handle" title="Verschieben">⠿</span>
+            <h3>🕐 Uhr</h3>
+            <button class="dash-collapse-btn" title="Ein-/Ausklappen">▾</button>
+          </div>
+          <div class="dash-card-body" style="text-align:center;">
+            <svg viewBox="0 0 300 300" class="clock-face dash-clock-face">
+              <circle cx="150" cy="150" r="148" class="clock-outer-ring"/>
+              <circle cx="150" cy="150" r="140" class="clock-dial"/>
+              <g id="dashClockTicks"></g>
+              <rect id="dashClockHourHand" x="147" y="80" width="6" height="75" rx="3" class="clock-hour-hand"/>
+              <rect id="dashClockMinuteHand" x="148.5" y="45" width="3" height="110" rx="1.5" class="clock-minute-hand"/>
+              <g id="dashClockSecondHand">
+                <line x1="150" y1="172" x2="150" y2="30" class="clock-second-line"/>
+                <circle cx="150" cy="52" r="9" class="clock-second-disc"/>
+              </g>
+              <circle cx="150" cy="150" r="7" class="clock-center-cap"/>
+            </svg>
+            <div id="dashClockDigital" style="font-size:12.5px;color:var(--text-secondary);font-weight:600;"></div>
           </div>
         </div>
         <div class="dash-card" data-card-id="roomBooking">
@@ -1247,6 +1291,26 @@ footer.hint a{color:var(--blue);}
           <input type="text" id="chatInput" placeholder="Nachricht schreiben …" maxlength="2000">
           <button class="btn btn-primary" id="btnSendChat">Senden</button>
         </div>
+      </div>
+    </section>
+
+    <!-- CLOCK -->
+    <section class="view" id="view-clock">
+      <div class="panel" style="padding:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;min-height:calc(100vh - 220px);">
+        <svg viewBox="0 0 300 300" class="clock-face">
+          <circle cx="150" cy="150" r="148" class="clock-outer-ring"/>
+          <circle cx="150" cy="150" r="140" class="clock-dial"/>
+          <g id="clockTicks"></g>
+          <rect id="clockHourHand" x="147" y="80" width="6" height="75" rx="3" class="clock-hour-hand"/>
+          <rect id="clockMinuteHand" x="148.5" y="45" width="3" height="110" rx="1.5" class="clock-minute-hand"/>
+          <g id="clockSecondHand">
+            <line x1="150" y1="172" x2="150" y2="30" class="clock-second-line"/>
+            <circle cx="150" cy="52" r="9" class="clock-second-disc"/>
+          </g>
+          <circle cx="150" cy="150" r="7" class="clock-center-cap"/>
+        </svg>
+        <div id="clockDigital" style="font-size:16px;color:var(--text-secondary);font-weight:600;"></div>
+        <button class="btn btn-secondary" id="btnClockFullscreen">🔲 Vollbildschirm</button>
       </div>
     </section>
 
@@ -2959,6 +3023,58 @@ document.addEventListener("click", (e)=>{
   if(!e.target.closest(".tools")) toolsActionsEl.classList.remove("open");
 });
 
+/* ============ CLOCK (Bahnhofsuhr-Stil) ============ */
+function createClockInstance(ids){
+  const ticksG = document.getElementById(ids.ticks);
+  const cx = 150, cy = 150;
+  // 60 Minutenstriche (jeder 5. kräftiger für die Stunden), klassisches, generisches Bahnhofsuhr-Muster
+  for(let i=0;i<60;i++){
+    const angle = (i/60) * 2*Math.PI - Math.PI/2;
+    const major = i % 5 === 0;
+    const rOuter = 138, rInner = major ? 114 : 128;
+    const x1 = cx + rOuter*Math.cos(angle), y1 = cy + rOuter*Math.sin(angle);
+    const x2 = cx + rInner*Math.cos(angle), y2 = cy + rInner*Math.sin(angle);
+    const line = document.createElementNS("http://www.w3.org/2000/svg","line");
+    line.setAttribute("x1",x1); line.setAttribute("y1",y1);
+    line.setAttribute("x2",x2); line.setAttribute("y2",y2);
+    line.setAttribute("class", major ? "clock-tick-major" : "clock-tick-minor");
+    ticksG.appendChild(line);
+  }
+  const hourHand = document.getElementById(ids.hour);
+  const minuteHand = document.getElementById(ids.minute);
+  const secondHand = document.getElementById(ids.second);
+  const digital = ids.digital ? document.getElementById(ids.digital) : null;
+  let rafId = null;
+  function tick(){
+    const now = new Date();
+    const h = now.getHours() % 12, m = now.getMinutes(), s = now.getSeconds(), ms = now.getMilliseconds();
+    const secDeg = (s + ms/1000) * 6;
+    const minDeg = (m + s/60) * 6;
+    const hourDeg = (h + m/60) * 30;
+    hourHand.style.transform = `rotate(${hourDeg}deg)`;
+    minuteHand.style.transform = `rotate(${minDeg}deg)`;
+    secondHand.style.transform = `rotate(${secDeg}deg)`;
+    if(digital){
+      digital.textContent = now.toLocaleDateString("de-DE",{weekday:"long", day:"2-digit", month:"long", year:"numeric"}) +
+        " · " + now.toLocaleTimeString("de-DE");
+    }
+    rafId = requestAnimationFrame(tick);
+  }
+  return { start(){ if(!rafId) tick(); }, stop(){ if(rafId){ cancelAnimationFrame(rafId); rafId = null; } } };
+}
+
+const mainClockInstance = createClockInstance({ ticks:"clockTicks", hour:"clockHourHand", minute:"clockMinuteHand", second:"clockSecondHand", digital:"clockDigital" });
+const dashClockInstance = createClockInstance({ ticks:"dashClockTicks", hour:"dashClockHourHand", minute:"dashClockMinuteHand", second:"dashClockSecondHand", digital:"dashClockDigital" });
+window.startClockAnimation = ()=> mainClockInstance.start();
+window.stopClockAnimation = ()=> mainClockInstance.stop();
+window.startDashClockAnimation = ()=> dashClockInstance.start();
+window.stopDashClockAnimation = ()=> dashClockInstance.stop();
+
+document.getElementById("btnClockFullscreen").addEventListener("click", ()=>{
+  if(document.fullscreenElement){ document.exitFullscreen(); }
+  else { document.documentElement.requestFullscreen().catch(()=>{}); }
+});
+
 /* ============ TABS ============ */
 document.querySelectorAll(".tab-btn").forEach(btn=>{
   btn.addEventListener("click", ()=>{
@@ -2967,7 +3083,8 @@ document.querySelectorAll(".tab-btn").forEach(btn=>{
     document.querySelectorAll("section.view").forEach(s=>s.classList.remove("active"));
     document.getElementById("view-"+btn.dataset.tab).classList.add("active");
     if(btn.dataset.tab === "weather") refreshStaleWeather();
-    if(btn.dataset.tab === "dashboard") renderDashboard();
+    if(btn.dataset.tab === "dashboard"){ renderDashboard(); startDashClockAnimation(); } else { stopDashClockAnimation(); }
+    if(btn.dataset.tab === "clock") startClockAnimation(); else stopClockAnimation();
   });
 });
 
@@ -7510,6 +7627,7 @@ document.getElementById("currencySelect").value = data.currency || "EUR";
 ensureResourcesMigrated();
 renderAll();
 setupDashboardLayout();
+startDashClockAnimation();
 if(data.cities.length===0){
   // Startbeispiel: Stuttgart automatisch vorschlagen
   addCity({name:"Stuttgart", country:"Deutschland", admin1:"Baden-Württemberg", lat:48.7758, lon:9.1829});
