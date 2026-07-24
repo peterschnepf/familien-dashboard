@@ -522,7 +522,6 @@ section.view.active{display:block;}
 .clock-second-disc{fill:#c1121f;}
 .clock-center-cap{fill:#111;stroke:#fafaf8;stroke-width:2;}
 .dash-clock-face{width:100%;max-width:150px;margin:6px auto;display:block;}
-.dash-card[data-card-id="clock"]{align-self:start;height:fit-content;}
 @media print{
   body:not(.printing-report) .clock-face{display:none;}
 }
@@ -699,6 +698,7 @@ footer.hint a{color:var(--blue);}
     <button class="tab-btn" data-tab="links">🔗 Links</button>
     <button class="tab-btn" data-tab="familyChat">💬 Familienchat</button>
     <button class="tab-btn" data-tab="clock">🕐 Uhr</button>
+    <button class="tab-btn" data-tab="sensors">📡 Sensoren</button>
     <button class="tab-btn" data-tab="birthdaysList">🎂 Geburtstage</button>
     <button class="tab-btn" data-tab="termineListe">🗒️ Terminliste</button>
     <button class="tab-btn" data-tab="roomBooking">📋 Belegungsplan</button>
@@ -1311,6 +1311,20 @@ footer.hint a{color:var(--blue);}
         </svg>
         <div id="clockDigital" style="font-size:16px;color:var(--text-secondary);font-weight:600;"></div>
         <button class="btn btn-secondary" id="btnClockFullscreen">🔲 Vollbildschirm</button>
+      </div>
+    </section>
+
+    <!-- SENSORS -->
+    <section class="view" id="view-sensors">
+      <div class="panel">
+        <div class="shop-add">
+          <input type="text" id="sensorDeviceName" placeholder="Name/Standort, z.B. Wohnzimmer">
+          <button class="btn btn-primary" id="btnAddSensorDevice">+ Hinzufügen</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);padding:0 16px;margin-top:2px;">
+          Name/Standort wird zwischen euren Geräten synchronisiert. Die Kamera-/Sensor-Adressen selbst bleiben bewusst nur lokal auf diesem Gerät gespeichert (nicht im Programmcode, nicht öffentlich sichtbar) — jedes Familienmitglied trägt sie einmal auf seinem eigenen Gerät ein.
+        </div>
+        <div id="sensorDevicesBody" style="padding:14px 16px 16px;"></div>
       </div>
     </section>
 
@@ -2517,7 +2531,7 @@ let fileHandle = null;
 let saveTimer = null;
 
 function loadInitial(){
-  const defaults = { events: [], shopping: [], cities: [], contracts: [], birthdays: [], payments: [], vouchers: [], inventory: [], medications: [], medicationLog: [], dashboardSettings: {order:[], collapsed:{}}, contacts: [], assets: [], income: [], incomingPayments: [], messages: [], checklists: [], whereis: [], roomBookings: [], resources: [], links: [], chatMessages: [], currency: "EUR", version: 1 };
+  const defaults = { events: [], shopping: [], cities: [], contracts: [], birthdays: [], payments: [], vouchers: [], inventory: [], medications: [], medicationLog: [], dashboardSettings: {order:[], collapsed:{}}, contacts: [], assets: [], income: [], incomingPayments: [], messages: [], checklists: [], whereis: [], roomBookings: [], resources: [], links: [], chatMessages: [], sensorDevices: [], currency: "EUR", version: 1 };
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw) return Object.assign({}, defaults, JSON.parse(raw));
@@ -2636,7 +2650,7 @@ const SUPABASE_TABLE_MAP = {
   contracts: "contracts", payments: "payments", incomingPayments: "incoming_payments",
   vouchers: "vouchers", assets: "assets", income: "income", contacts: "contacts",
   messages: "messages", checklists: "checklists", whereis: "whereis_entries",
-  resources: "resources", roomBookings: "room_bookings", cities: "cities", links: "links", chatMessages: "chat_messages"
+  resources: "resources", roomBookings: "room_bookings", cities: "cities", links: "links", chatMessages: "chat_messages", sensorDevices: "sensor_devices"
 };
 
 function setSyncStatus(state){
@@ -2984,7 +2998,7 @@ document.getElementById("importInput").addEventListener("change", (e)=>{
     try{
       const imported = JSON.parse(reader.result);
       if(imported && typeof imported === "object"){
-        data = Object.assign({events:[],shopping:[],cities:[],contracts:[],birthdays:[],payments:[],vouchers:[],inventory:[],medications:[],medicationLog:[],dashboardSettings:{order:[],collapsed:{}},contacts:[],assets:[],income:[],incomingPayments:[],messages:[],checklists:[],whereis:[],roomBookings:[],resources:[],links:[],chatMessages:[],currency:"EUR",version:1}, imported);
+        data = Object.assign({events:[],shopping:[],cities:[],contracts:[],birthdays:[],payments:[],vouchers:[],inventory:[],medications:[],medicationLog:[],dashboardSettings:{order:[],collapsed:{}},contacts:[],assets:[],income:[],incomingPayments:[],messages:[],checklists:[],whereis:[],roomBookings:[],resources:[],links:[],chatMessages:[],sensorDevices:[],currency:"EUR",version:1}, imported);
         persist(); // lokale Sicherung
         renderAll();
         if(supabaseClient && currentUser){ syncAllToSupabase(); } // kompletter Import betrifft potenziell alles -> Vollabgleich statt Einzeländerung
@@ -3075,6 +3089,274 @@ document.getElementById("btnClockFullscreen").addEventListener("click", ()=>{
   else { document.documentElement.requestFullscreen().catch(()=>{}); }
 });
 
+/* ============ SENSORS (Geräteliste: Kamera/Temperatur/Bewegung pro ESP32-Gerät) ============ */
+// Name/Standort jedes Geräts läuft über data.sensorDevices (synchronisiert wie der Rest der App).
+// Die eigentlichen Adressen (Kamera/Temperatur/Bewegung) bleiben bewusst NUR lokal im Browser
+// gespeichert (nicht in data/Supabase, nicht im Programmcode) - das Repository auf GitHub ist
+// öffentlich einsehbar, die private Heimnetz-Adresse darf dort niemals landen. Jedes Gerät
+// trägt sie einmal selbst ein.
+const SIM_CAMERA = "SIMULATED_CAMERA";
+const SIM_TEMPERATURE = "SIMULATED_TEMPERATURE";
+const SIM_MOTION = "SIMULATED_MOTION";
+const sensorTimers = {}; // deviceId -> { camera, temperature, motion }
+
+function getSensorConfig(deviceId){
+  try{ return JSON.parse(localStorage.getItem("sensorConfig_"+deviceId)) || {}; }
+  catch(e){ return {}; }
+}
+function saveSensorConfig(deviceId, config){
+  localStorage.setItem("sensorConfig_"+deviceId, JSON.stringify(config));
+}
+function clearSensorConfig(deviceId){
+  localStorage.removeItem("sensorConfig_"+deviceId);
+}
+
+function parseTemperatureResponse(text){
+  text = text.trim();
+  try{
+    const json = JSON.parse(text);
+    if(typeof json === "number") return json;
+    if(json && typeof json === "object") return json.temperature ?? json.temp ?? json.value ?? null;
+  }catch(e){ /* kein JSON, weiter unten als Text auswerten */ }
+  const parsed = parseFloat(text);
+  return isNaN(parsed) ? null : parsed;
+}
+function parseMotionResponse(text){
+  text = text.trim();
+  try{
+    const json = JSON.parse(text);
+    if(typeof json === "boolean") return json;
+    if(typeof json === "number") return json !== 0;
+    if(json && typeof json === "object"){
+      const v = json.motion ?? json.detected ?? json.value ?? null;
+      if(v === null) return null;
+      return !!v && v !== "0" && v !== "false";
+    }
+  }catch(e){ /* kein JSON, weiter unten als einfachen Text auswerten */ }
+  const t = text.toLowerCase();
+  if(["1","true","high","motion","detected"].includes(t)) return true;
+  if(["0","false","low","none","no motion"].includes(t)) return false;
+  return null;
+}
+
+function stopDeviceTimers(deviceId){
+  const t = sensorTimers[deviceId];
+  if(!t) return;
+  clearInterval(t.camera); clearInterval(t.temperature); clearInterval(t.motion);
+  delete sensorTimers[deviceId];
+}
+window.stopAllSensorTimers = function(){ Object.keys(sensorTimers).forEach(stopDeviceTimers); };
+
+function refreshDeviceCamera(cid, cfg){
+  const img = document.getElementById(cid+"_cameraImage");
+  if(!img || !cfg.cameraUrl) return;
+  if(cfg.cameraUrl === SIM_CAMERA){ img.src = "https://picsum.photos/640/480?r=" + Date.now(); return; }
+  if(cfg.cameraMode === "stream"){ img.src = cfg.cameraUrl; return; }
+  const sep = cfg.cameraUrl.includes("?") ? "&" : "?";
+  img.src = cfg.cameraUrl + sep + "t=" + Date.now();
+}
+async function refreshDeviceTemperature(cid, cfg){
+  const box = document.getElementById(cid+"_temperatureBox");
+  if(!box || !cfg.temperatureUrl) return;
+  if(cfg.temperatureUrl === SIM_TEMPERATURE){
+    const value = 21 + (Math.random()*2 - 1);
+    box.innerHTML = `<div style="font-size:26px;font-weight:700;">🌡️ ${value.toFixed(1)} °C</div><div style="font-size:11px;color:var(--text-secondary);">Simuliert</div>`;
+    return;
+  }
+  try{
+    const sep = cfg.temperatureUrl.includes("?") ? "&" : "?";
+    const res = await fetch(cfg.temperatureUrl + sep + "t=" + Date.now());
+    const value = parseTemperatureResponse(await res.text());
+    if(value === null){ box.innerHTML = `<div style="font-size:12px;color:var(--text-secondary);">Temperatur: unlesbare Antwort</div>`; return; }
+    box.innerHTML = `<div style="font-size:26px;font-weight:700;">🌡️ ${Number(value).toFixed(1)} °C</div><div style="font-size:11px;color:var(--text-secondary);">${new Date().toLocaleTimeString("de-DE")}</div>`;
+  }catch(e){
+    box.innerHTML = `<div style="font-size:12px;color:var(--text-secondary);">Temperatur: Fehler beim Abrufen (evtl. fehlender CORS-Header, siehe Konsole)</div>`;
+    console.warn("[Temperatur]", cid, e);
+  }
+}
+async function refreshDeviceMotion(cid, cfg){
+  const box = document.getElementById(cid+"_motionBox");
+  if(!box || !cfg.motionUrl) return;
+  if(cfg.motionUrl === SIM_MOTION){
+    const detected = Math.random() < 0.4;
+    box.innerHTML = `<div style="font-size:16px;font-weight:700;">${detected ? "🔴 Bewegung erkannt" : "🟢 Keine Bewegung"}</div><div style="font-size:11px;color:var(--text-secondary);">Simuliert</div>`;
+    return;
+  }
+  try{
+    const sep = cfg.motionUrl.includes("?") ? "&" : "?";
+    const res = await fetch(cfg.motionUrl + sep + "t=" + Date.now());
+    const detected = parseMotionResponse(await res.text());
+    if(detected === null){ box.innerHTML = `<div style="font-size:12px;color:var(--text-secondary);">Bewegung: unlesbare Antwort</div>`; return; }
+    box.innerHTML = `<div style="font-size:16px;font-weight:700;">${detected ? "🔴 Bewegung erkannt" : "🟢 Keine Bewegung"}</div><div style="font-size:11px;color:var(--text-secondary);">${new Date().toLocaleTimeString("de-DE")}</div>`;
+  }catch(e){
+    box.innerHTML = `<div style="font-size:12px;color:var(--text-secondary);">Bewegung: Fehler beim Abrufen (evtl. fehlender CORS-Header, siehe Konsole)</div>`;
+    console.warn("[Bewegung]", cid, e);
+  }
+}
+
+function startDeviceLiveDisplays(device){
+  const cid = "sd_" + device.id;
+  const cfg = getSensorConfig(device.id);
+  stopDeviceTimers(device.id);
+  const timers = { camera:null, temperature:null, motion:null };
+
+  const img = document.getElementById(cid+"_cameraImage");
+  if(cfg.cameraUrl){
+    img.style.display = "block";
+    refreshDeviceCamera(cid, cfg);
+    if(cfg.cameraUrl === SIM_CAMERA || cfg.cameraMode !== "stream"){
+      timers.camera = setInterval(()=> refreshDeviceCamera(cid, cfg), 5000);
+    }
+  } else { img.style.display = "none"; }
+
+  if(cfg.temperatureUrl){
+    refreshDeviceTemperature(cid, cfg);
+    timers.temperature = setInterval(()=> refreshDeviceTemperature(cid, cfg), cfg.temperatureUrl===SIM_TEMPERATURE ? 5000 : 30000);
+  } else { document.getElementById(cid+"_temperatureBox").innerHTML = ""; }
+
+  if(cfg.motionUrl){
+    refreshDeviceMotion(cid, cfg);
+    timers.motion = setInterval(()=> refreshDeviceMotion(cid, cfg), 4000);
+  } else { document.getElementById(cid+"_motionBox").innerHTML = ""; }
+
+  document.getElementById(cid+"_emptyHint").style.display = (cfg.cameraUrl||cfg.temperatureUrl||cfg.motionUrl) ? "none" : "block";
+  sensorTimers[device.id] = timers;
+}
+
+function buildSensorCard(device){
+  const cfg = getSensorConfig(device.id);
+  const cid = "sd_" + device.id;
+  const card = document.createElement("div");
+  card.className = "dash-card";
+  card.style.marginBottom = "14px";
+  card.innerHTML = `
+    <div class="dash-card-header" style="margin-bottom:10px;">
+      <h3 style="flex:1;">📡 ${escapeHtml(device.name)}</h3>
+      <button class="btn-icon" id="${cid}_editName" title="Umbenennen">✏️</button>
+      <button class="btn-icon" id="${cid}_delete" title="Gerät löschen">✕</button>
+    </div>
+    <button class="btn btn-secondary" id="${cid}_toggleSettings" style="margin-bottom:10px;">⚙️ Adressen einrichten</button>
+    <div id="${cid}_settings" style="display:none;border-top:1px solid var(--border);padding-top:12px;margin-bottom:12px;">
+      <div class="field-row">
+        <div class="field">
+          <label>Kamera-Adresse (URL, optional)</label>
+          <input type="text" id="${cid}_cameraUrl" placeholder="z.B. https://xxxxx.myfritz.net/... oder http://ESP32-IP/jpg/image.jpg">
+        </div>
+        <div class="field">
+          <label>Modus</label>
+          <select id="${cid}_cameraMode">
+            <option value="snapshot">Standbild (regelmäßig aktualisiert)</option>
+            <option value="stream">Live-Stream (MJPEG)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Temperatur-Adresse (URL, optional)</label>
+        <input type="text" id="${cid}_temperatureUrl" placeholder="z.B. http://ESP32-IP/temperature">
+      </div>
+      <div class="field">
+        <label>Bewegungssensor-Adresse (URL, optional)</label>
+        <input type="text" id="${cid}_motionUrl" placeholder="z.B. http://ESP32-IP/motion">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+        <button class="btn btn-primary" id="${cid}_saveConfig">Speichern</button>
+        <button class="btn btn-secondary" id="${cid}_testCamera">🧪 Testbild</button>
+        <button class="btn btn-secondary" id="${cid}_testTemperature">🧪 Testwert Temp.</button>
+        <button class="btn btn-secondary" id="${cid}_testMotion">🧪 Testwert Bewegung</button>
+      </div>
+    </div>
+    <div id="${cid}_cameraBox" style="text-align:center;margin-bottom:10px;">
+      <img id="${cid}_cameraImage" style="max-width:100%;border-radius:10px;border:1px solid var(--border);display:none;">
+    </div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;justify-content:center;">
+      <div id="${cid}_temperatureBox" style="text-align:center;"></div>
+      <div id="${cid}_motionBox" style="text-align:center;"></div>
+    </div>
+    <div id="${cid}_emptyHint" class="shop-empty" style="display:none;">Noch keine Adressen eingerichtet. Klick auf "⚙️ Adressen einrichten".</div>
+  `;
+
+  card.querySelector("#"+cid+"_toggleSettings").addEventListener("click", ()=>{
+    const box = card.querySelector("#"+cid+"_settings");
+    const nowOpen = box.style.display === "none";
+    box.style.display = nowOpen ? "block" : "none";
+    if(nowOpen){
+      card.querySelector("#"+cid+"_cameraUrl").value = cfg.cameraUrl && cfg.cameraUrl!==SIM_CAMERA ? cfg.cameraUrl : "";
+      card.querySelector("#"+cid+"_cameraMode").value = cfg.cameraMode || "snapshot";
+      card.querySelector("#"+cid+"_temperatureUrl").value = cfg.temperatureUrl && cfg.temperatureUrl!==SIM_TEMPERATURE ? cfg.temperatureUrl : "";
+      card.querySelector("#"+cid+"_motionUrl").value = cfg.motionUrl && cfg.motionUrl!==SIM_MOTION ? cfg.motionUrl : "";
+    }
+  });
+  card.querySelector("#"+cid+"_saveConfig").addEventListener("click", ()=>{
+    const newCfg = {
+      cameraUrl: card.querySelector("#"+cid+"_cameraUrl").value.trim(),
+      cameraMode: card.querySelector("#"+cid+"_cameraMode").value,
+      temperatureUrl: card.querySelector("#"+cid+"_temperatureUrl").value.trim(),
+      motionUrl: card.querySelector("#"+cid+"_motionUrl").value.trim()
+    };
+    saveSensorConfig(device.id, newCfg);
+    startDeviceLiveDisplays(device);
+  });
+  card.querySelector("#"+cid+"_testCamera").addEventListener("click", ()=>{
+    const c = getSensorConfig(device.id);
+    c.cameraUrl = SIM_CAMERA; c.cameraMode = "snapshot";
+    saveSensorConfig(device.id, c);
+    startDeviceLiveDisplays(device);
+  });
+  card.querySelector("#"+cid+"_testTemperature").addEventListener("click", ()=>{
+    const c = getSensorConfig(device.id);
+    c.temperatureUrl = SIM_TEMPERATURE;
+    saveSensorConfig(device.id, c);
+    startDeviceLiveDisplays(device);
+  });
+  card.querySelector("#"+cid+"_testMotion").addEventListener("click", ()=>{
+    const c = getSensorConfig(device.id);
+    c.motionUrl = SIM_MOTION;
+    saveSensorConfig(device.id, c);
+    startDeviceLiveDisplays(device);
+  });
+  card.querySelector("#"+cid+"_editName").addEventListener("click", ()=>{
+    const name = prompt("Neuer Name/Standort:", device.name);
+    if(!name || !name.trim()) return;
+    device.name = name.trim();
+    persist({table:"sensorDevices", op:"upsert", item:device});
+    renderSensorDevices();
+  });
+  card.querySelector("#"+cid+"_delete").addEventListener("click", ()=>{
+    if(!confirm(`"${device.name}" wirklich löschen? Die lokal gespeicherten Adressen für dieses Gerät werden auf diesem Gerät ebenfalls entfernt.`)) return;
+    stopDeviceTimers(device.id);
+    clearSensorConfig(device.id);
+    data.sensorDevices = data.sensorDevices.filter(d=>d.id!==device.id);
+    persist({table:"sensorDevices", op:"delete", id:device.id});
+    renderSensorDevices();
+  });
+
+  return card;
+}
+
+function renderSensorDevices(){
+  const box = document.getElementById("sensorDevicesBody");
+  stopAllSensorTimers();
+  box.innerHTML = "";
+  if(data.sensorDevices.length===0){
+    box.innerHTML = '<div class="shop-empty">Noch keine Sensor-Geräte angelegt. Trag oben einen Namen/Standort ein.</div>';
+    return;
+  }
+  data.sensorDevices.slice().sort((a,b)=>(a.name||"").localeCompare(b.name||"")).forEach(device=>{
+    box.appendChild(buildSensorCard(device));
+    startDeviceLiveDisplays(device);
+  });
+}
+
+document.getElementById("btnAddSensorDevice").addEventListener("click", ()=>{
+  const name = document.getElementById("sensorDeviceName").value.trim();
+  if(!name){ alert("Bitte einen Namen/Standort angeben."); return; }
+  const newDevice = { id: uid(), name };
+  data.sensorDevices.push(newDevice);
+  document.getElementById("sensorDeviceName").value = "";
+  persist({table:"sensorDevices", op:"upsert", item:newDevice});
+  renderSensorDevices();
+});
+
 /* ============ TABS ============ */
 document.querySelectorAll(".tab-btn").forEach(btn=>{
   btn.addEventListener("click", ()=>{
@@ -3085,6 +3367,7 @@ document.querySelectorAll(".tab-btn").forEach(btn=>{
     if(btn.dataset.tab === "weather") refreshStaleWeather();
     if(btn.dataset.tab === "dashboard"){ renderDashboard(); startDashClockAnimation(); } else { stopDashClockAnimation(); }
     if(btn.dataset.tab === "clock") startClockAnimation(); else stopClockAnimation();
+    if(btn.dataset.tab === "sensors") renderSensorDevices(); else stopAllSensorTimers();
   });
 });
 
@@ -7616,6 +7899,7 @@ function renderAll(){
   renderWhereis();
   renderLinks();
   renderChatMessages();
+  if(document.getElementById("view-sensors").classList.contains("active")) renderSensorDevices();
   renderResourceList();
   renderRoomBookings();
   renderBirthdaysList();
