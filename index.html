@@ -3179,7 +3179,7 @@ async function refreshDeviceMotion(cid, cfg){
   if(!box || !cfg.motionUrl) return;
   if(cfg.motionUrl === SIM_MOTION){
     const detected = Math.random() < 0.4;
-    box.innerHTML = `<div style="font-size:16px;font-weight:700;">${detected ? "🔴 Bewegung erkannt" : "🟢 Keine Bewegung"}</div><div style="font-size:11px;color:var(--text-secondary);">Simuliert</div>`;
+    box.innerHTML = `<div style="font-size:16px;font-weight:700;white-space:nowrap;">${detected ? "🔴 Bewegung" : "🟢 Ruhig"}</div><div style="font-size:11px;color:var(--text-secondary);">Simuliert</div>`;
     return;
   }
   try{
@@ -3187,7 +3187,7 @@ async function refreshDeviceMotion(cid, cfg){
     const res = await fetch(cfg.motionUrl + sep + "t=" + Date.now());
     const detected = parseMotionResponse(await res.text());
     if(detected === null){ box.innerHTML = `<div style="font-size:12px;color:var(--text-secondary);">Bewegung: unlesbare Antwort</div>`; return; }
-    box.innerHTML = `<div style="font-size:16px;font-weight:700;">${detected ? "🔴 Bewegung erkannt" : "🟢 Keine Bewegung"}</div><div style="font-size:11px;color:var(--text-secondary);">${new Date().toLocaleTimeString("de-DE")}</div>`;
+    box.innerHTML = `<div style="font-size:16px;font-weight:700;white-space:nowrap;">${detected ? "🔴 Bewegung" : "🟢 Ruhig"}</div><div style="font-size:11px;color:var(--text-secondary);">${new Date().toLocaleTimeString("de-DE")}</div>`;
   }catch(e){
     box.innerHTML = `<div style="font-size:12px;color:var(--text-secondary);">Bewegung: Fehler beim Abrufen (evtl. fehlender CORS-Header, siehe Konsole)</div>`;
     console.warn("[Bewegung]", cid, e);
@@ -3269,8 +3269,8 @@ function buildSensorCard(device){
       <img id="${cid}_cameraImage" style="max-width:100%;border-radius:10px;border:1px solid var(--border);display:none;">
     </div>
     <div style="display:flex;gap:24px;flex-wrap:wrap;justify-content:center;">
-      <div id="${cid}_temperatureBox" style="text-align:center;"></div>
-      <div id="${cid}_motionBox" style="text-align:center;"></div>
+      <div id="${cid}_temperatureBox" style="text-align:center;min-width:110px;"></div>
+      <div id="${cid}_motionBox" style="text-align:center;min-width:110px;"></div>
     </div>
     <div id="${cid}_emptyHint" class="shop-empty" style="display:none;">Noch keine Adressen eingerichtet. Klick auf "⚙️ Adressen einrichten".</div>
   `;
