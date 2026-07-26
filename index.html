@@ -117,6 +117,36 @@ body{
 .tab-btn.active{color:var(--blue);border-bottom-color:var(--blue);}
 .tab-btn:hover:not(.active){color:var(--text);}
 
+/* Zusätzliches Modul-Menü fürs responsive Design (Tab-Leiste bleibt zusätzlich bestehen) */
+.tabs-wrap{position:relative;display:flex;align-items:stretch;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:60px;z-index:40;}
+.tabs-wrap .tabs{border-bottom:none;position:static;flex:1;}
+.tabs-menu-btn{display:none;}
+.tabs-menu-dropdown{display:none;}
+@media (max-width:1024px){
+  .tabs-menu-btn{
+    display:flex;align-items:center;justify-content:center;flex:none;
+    width:44px;border:none;border-right:1px solid var(--border);background:var(--surface);
+    font-size:18px;cursor:pointer;color:var(--text-secondary);
+  }
+  .tabs-menu-btn:hover{background:var(--bg);}
+  .tabs-menu-dropdown.open{
+    display:grid;grid-template-columns:1fr 1fr;gap:2px;
+    position:absolute;top:100%;left:0;right:0;z-index:60;
+    background:var(--surface);border:1px solid var(--border);border-top:none;
+    box-shadow:0 10px 30px rgba(0,0,0,.2);padding:8px;max-height:70vh;overflow-y:auto;
+  }
+  .tabs-menu-dropdown button{
+    text-align:left;padding:10px 12px;border-radius:6px;border:none;background:transparent;
+    font-family:inherit;font-size:13.5px;font-weight:600;color:var(--text);cursor:pointer;
+    display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .tabs-menu-dropdown button:hover{background:var(--bg);}
+  .tabs-menu-dropdown button.active{color:var(--blue);background:var(--blue-tint);}
+}
+@media (max-width:600px){
+  .tabs-menu-dropdown.open{grid-template-columns:1fr;}
+}
+
 main{flex:1;max-width:1280px;width:100%;margin:0 auto;padding:20px;}
 section.view{display:none;}
 section.view.active{display:block;}
@@ -709,7 +739,9 @@ footer.hint a{color:var(--blue);}
     </div>
   </header>
 
-  <nav class="tabs">
+  <div class="tabs-wrap">
+    <button id="btnTabsMenu" class="tabs-menu-btn" title="Alle Module">☰</button>
+    <nav class="tabs">
     <button class="tab-btn active" data-tab="dashboard">🏠 Diese Woche</button>
     <button class="tab-btn" data-tab="calendar">📅 Kalender</button>
     <button class="tab-btn" data-tab="shopping">🛒 Einkaufsliste</button>
@@ -733,7 +765,9 @@ footer.hint a{color:var(--blue);}
     <button class="tab-btn" data-tab="birthdaysList">🎂 Geburtstage</button>
     <button class="tab-btn" data-tab="termineListe">🗒️ Terminliste</button>
     <button class="tab-btn" data-tab="roomBooking">📋 Belegungsplan</button>
-  </nav>
+    </nav>
+    <div id="tabsMenuDropdown" class="tabs-menu-dropdown"></div>
+  </div>
 
   <main>
     <div id="printListHeader" class="print-list-header"></div>
@@ -3516,7 +3550,32 @@ document.querySelectorAll(".tab-btn").forEach(btn=>{
     if(btn.dataset.tab === "dashboard"){ renderDashboard(); startDashClockAnimation(); } else { stopDashClockAnimation(); }
     if(btn.dataset.tab === "clock") startClockAnimation(); else stopClockAnimation();
     if(btn.dataset.tab === "sensors") renderSensorDevices(); else stopAllSensorTimers();
+    document.querySelectorAll(".tabs-menu-dropdown button").forEach(b=>{
+      b.classList.toggle("active", b.dataset.tab === btn.dataset.tab);
+    });
+    document.getElementById("tabsMenuDropdown").classList.remove("open");
   });
+});
+
+// Zusätzliches Modul-Menü (nur responsive sichtbar) - wird automatisch aus den vorhandenen
+// Tabs aufgebaut, damit beide Listen nie auseinanderlaufen können.
+const tabsMenuDropdown = document.getElementById("tabsMenuDropdown");
+document.querySelectorAll(".tabs .tab-btn").forEach(tab=>{
+  const item = document.createElement("button");
+  item.innerHTML = tab.innerHTML;
+  item.dataset.tab = tab.dataset.tab;
+  if(tab.classList.contains("active")) item.classList.add("active");
+  item.addEventListener("click", ()=> tab.click());
+  tabsMenuDropdown.appendChild(item);
+});
+document.getElementById("btnTabsMenu").addEventListener("click", (e)=>{
+  e.stopPropagation();
+  tabsMenuDropdown.classList.toggle("open");
+});
+document.addEventListener("click", (e)=>{
+  if(!tabsMenuDropdown.contains(e.target) && e.target.id !== "btnTabsMenu"){
+    tabsMenuDropdown.classList.remove("open");
+  }
 });
 
 /* ============ DATE HELPERS ============ */
