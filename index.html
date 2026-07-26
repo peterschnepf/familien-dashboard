@@ -58,6 +58,33 @@ body{
 .dot.saving{background:#ffd633;}
 #btnToolsMenu{display:none;}
 .tools-actions{display:contents;}
+
+/* Globale Suche */
+.global-search-wrap{position:relative;flex:1;min-width:180px;max-width:420px;}
+.global-search-input{
+  width:100%;padding:9px 14px;border-radius:20px;border:1px solid rgba(255,255,255,.35);
+  background:rgba(255,255,255,.15);color:#fff;font-family:inherit;font-size:14px;
+}
+.global-search-input::placeholder{color:rgba(255,255,255,.75);}
+.global-search-input:focus{outline:none;background:#fff;color:var(--text);border-color:#fff;}
+.global-search-input:focus::placeholder{color:var(--text-secondary);}
+.global-search-results{
+  display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;max-height:70vh;overflow-y:auto;
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);
+  z-index:60;color:var(--text);
+}
+.global-search-results.open{display:block;}
+.gsr-group-title{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-secondary);padding:10px 14px 4px;}
+.gsr-item{padding:8px 14px;cursor:pointer;border-top:1px solid var(--border);}
+.gsr-item:first-child, .gsr-group-title + .gsr-item{border-top:none;}
+.gsr-item:hover{background:var(--bg);}
+.gsr-item .gsr-title{font-weight:600;font-size:13.5px;}
+.gsr-item .gsr-sub{font-size:12px;color:var(--text-secondary);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gsr-empty{padding:16px;text-align:center;color:var(--text-secondary);font-size:13px;}
+@media (max-width:1024px){
+  .global-search-wrap{order:10;flex-basis:100%;max-width:none;}
+}
+
 .btn{
   border:none;border-radius:6px;padding:8px 13px;font-size:13px;font-weight:600;
   cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px;
@@ -318,8 +345,8 @@ section.view.active{display:block;}
 .weather-card:hover{box-shadow:0 0 0 2px var(--blue-tint);}
 .weather-card.pinned{border-color:var(--blue);}
 .weather-card.pinned .city::after{content:" 📌"; font-size:12px;}
-.weather-card .city{font-size:15px;font-weight:700;}
-.weather-card .country{font-size:11.5px;color:var(--text-secondary);}
+.weather-card .city{font-size:15px;font-weight:700;padding-right:112px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.weather-card .country{font-size:11.5px;color:var(--text-secondary);padding-right:112px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .weather-card .temp{font-size:34px;font-weight:700;margin:10px 0 2px;display:flex;align-items:center;gap:10px;}
 .weather-card .emoji{font-size:32px;}
 .weather-card .desc{font-size:12.5px;color:var(--text-secondary);}
@@ -654,6 +681,10 @@ footer.hint a{color:var(--blue);}
 
   <header class="shellbar">
     <div class="brand"><div class="logo">👨‍👩‍👧‍👦</div> FADA Familien-Dashboard</div>
+    <div class="global-search-wrap">
+      <input type="text" id="globalSearchInput" class="global-search-input" placeholder="🔍 Alles durchsuchen …" autocomplete="off">
+      <div id="globalSearchResults" class="global-search-results"></div>
+    </div>
     <div class="tools">
       <div class="status"><span class="dot" id="saveDot"></span><span id="saveLabel">Gespeichert</span></div>
       <div class="status" id="syncStatus" title="Cloud-Synchronisierung"><span class="dot" id="syncDot"></span><span id="syncLabel">Cloud: offline</span></div>
@@ -896,7 +927,7 @@ footer.hint a{color:var(--blue);}
             <button class="dash-collapse-btn" title="Ein-/Ausklappen">▾</button>
           </div>
           <div class="dash-card-body">
-            <div id="dashChat"></div>
+            <div class="dash-list" id="dashChat"></div>
           </div>
         </div>
         <div class="dash-card" data-card-id="clock">
@@ -3357,6 +3388,123 @@ document.getElementById("btnAddSensorDevice").addEventListener("click", ()=>{
   renderSensorDevices();
 });
 
+/* ============ GLOBALE SUCHE ============ */
+function switchToTab(tabName){
+  const btn = document.querySelector('.tab-btn[data-tab="'+tabName+'"]');
+  if(btn) btn.click();
+}
+function closeGlobalSearch(){
+  document.getElementById("globalSearchResults").classList.remove("open");
+  document.getElementById("globalSearchInput").value = "";
+}
+
+const SEARCH_MODULES = [
+  { icon:"📅", label:"Termine", tab:"calendar", items:()=>data.events, fields:["title","location","notes","person","category"],
+    render:(ev)=>({ title: ev.title, sub: [ev.date, ev.location].filter(Boolean).join(" · ") }), open:(ev)=>openEventModal(ev) },
+  { icon:"🎂", label:"Geburtstage", tab:"birthdaysList", items:()=>data.birthdays, fields:["name","notes"],
+    render:(b)=>({ title: b.name, sub: b.notes||"" }), open:(b)=>openBirthdayModal(b) },
+  { icon:"🛒", label:"Einkaufsliste", tab:"shopping", items:()=>data.shopping, fields:["text","category","supplier","person"],
+    render:(i)=>({ title: i.text, sub: [i.category,i.supplier].filter(Boolean).join(" · ") }), open:(i)=>openShopEditModal(i) },
+  { icon:"📦", label:"Bestände", tab:"inventory", items:()=>data.inventory, fields:["name","category","supplier"],
+    render:(i)=>({ title: i.name, sub: i.category||"" }), open:(i)=>openInvEditModal(i) },
+  { icon:"💊", label:"Medikamente", tab:"medications", items:()=>data.medications, fields:["name"],
+    render:(m)=>({ title: m.name, sub: "" }), open:(m)=>openMedicationEditModal(m) },
+  { icon:"📄", label:"Verträge", tab:"contracts", items:()=>data.contracts, fields:["name","category","notes"],
+    render:(c)=>({ title: c.name, sub: c.category||"" }), open:(c)=>openContractModal(c) },
+  { icon:"💶", label:"Zahlungen", tab:"payments", items:()=>data.payments, fields:["text","person"],
+    render:(p)=>({ title: p.text, sub: p.person||"" }), open:(p)=>openPaymentEditModal(p) },
+  { icon:"📥", label:"Zahlungseingänge", tab:"incomingPayments", items:()=>data.incomingPayments, fields:["text","person"],
+    render:(p)=>({ title: p.text, sub: p.person||"" }), open:(p)=>openIncomingPaymentEditModal(p) },
+  { icon:"🎁", label:"Gutscheine", tab:"vouchers", items:()=>data.vouchers, fields:["text","person"],
+    render:(v)=>({ title: v.text, sub: v.person||"" }), open:(v)=>openVoucherEditModal(v) },
+  { icon:"💰", label:"Vermögen & Inventar", tab:"assets", items:()=>data.assets, fields:["name","category","notes","institution"],
+    render:(a)=>({ title: a.name, sub: a.category||"" }), open:(a)=>openAssetModal(a) },
+  { icon:"💵", label:"Einkünfte", tab:"income", items:()=>data.income, fields:["name","category","notes"],
+    render:(i)=>({ title: i.name, sub: i.category||"" }), open:(i)=>openIncomeModal(i) },
+  { icon:"📇", label:"Kontakte", tab:"contacts", items:()=>data.contacts, fields:["name","role","phone","email","address","notes"],
+    render:(c)=>({ title: c.name, sub: c.role || c.phone || c.email || "" }), open:(c)=>openContactModal(c) },
+  { icon:"📌", label:"Mitteilungen", tab:"messages", items:()=>data.messages, fields:["title","text","author"],
+    render:(m)=>({ title: m.title, sub: (m.text||"").slice(0,60) }), open:(m)=>openMessageEditModal(m) },
+  { icon:"🔎", label:"Wo ist", tab:"whereis", items:()=>data.whereis, fields:["name","category","location","notes"],
+    render:(w)=>({ title: w.name, sub: w.location||"" }), open:(w)=>openWhereisEditModal(w) },
+  { icon:"🔗", label:"Links", tab:"links", items:()=>data.links, fields:["title","category","notes"],
+    render:(l)=>({ title: l.title, sub: l.category||"" }), open:(l)=>openLinkEditModal(l) },
+  { icon:"🗂️", label:"Ressourcen", tab:"roomBooking", items:()=>data.resources, fields:["name","category","notes"],
+    render:(r)=>({ title: r.name, sub: r.category||"" }), open:(r)=>openResourceEditModal(r) },
+  { icon:"📋", label:"Belegungsplan", tab:"roomBooking", items:()=>data.roomBookings, fields:["notes","person"],
+    render:(b)=>({ title: b.person || "Buchung", sub: b.notes||"" }), open:(b)=>openRoomBookingEditModal(b) },
+  { icon:"💬", label:"Familienchat", tab:"familyChat", items:()=>data.chatMessages, fields:["text","senderName"],
+    render:(m)=>({ title: m.senderName || "Familie", sub: (m.text||"").slice(0,60) }), open:null },
+  { icon:"✅", label:"Checklisten", tab:"checklists", items:()=>data.checklists, fields:["title","assignee"],
+    render:(cl)=>({ title: cl.title, sub: "Checkliste" }), open:null },
+];
+
+function searchGlobal(query){
+  const q = query.trim().toLowerCase();
+  if(q.length < 2) return [];
+  const groups = [];
+
+  SEARCH_MODULES.forEach(mod=>{
+    const items = mod.items() || [];
+    const matches = items.filter(item=> mod.fields.some(f=> (item[f]||"").toString().toLowerCase().includes(q)) );
+    if(matches.length){
+      groups.push({ icon: mod.icon, label: mod.label, results: matches.slice(0,8).map(item=>{
+        const r = mod.render(item);
+        return { title: r.title, sub: r.sub, onClick: ()=>{ switchToTab(mod.tab); if(mod.open) mod.open(item); closeGlobalSearch(); } };
+      })});
+    }
+  });
+
+  // Checklisten-Unterpunkte einzeln durchsuchen (verschachtelt, nicht über das normale Feld-Muster erfassbar)
+  const clItemMatches = [];
+  data.checklists.forEach(cl=>{
+    (cl.items||[]).forEach(it=>{
+      if((it.text||"").toLowerCase().includes(q)){
+        clItemMatches.push({ title: it.text, sub: "in: " + cl.title, onClick: ()=>{ switchToTab("checklists"); closeGlobalSearch(); } });
+      }
+    });
+  });
+  if(clItemMatches.length) groups.push({ icon:"✅", label:"Checklisten-Punkte", results: clItemMatches.slice(0,8) });
+
+  return groups;
+}
+
+function renderGlobalSearchResults(groups, query){
+  const box = document.getElementById("globalSearchResults");
+  if(!query || query.trim().length < 2){ box.classList.remove("open"); box.innerHTML = ""; return; }
+  if(groups.length === 0){
+    box.innerHTML = '<div class="gsr-empty">Keine Treffer für "' + escapeHtml(query) + '"</div>';
+    box.classList.add("open");
+    return;
+  }
+  box.innerHTML = "";
+  groups.forEach(g=>{
+    const h = document.createElement("div"); h.className = "gsr-group-title";
+    h.textContent = g.icon + " " + g.label + " (" + g.results.length + ")";
+    box.appendChild(h);
+    g.results.forEach(r=>{
+      const el = document.createElement("div"); el.className = "gsr-item";
+      el.innerHTML = `<div class="gsr-title">${escapeHtml(r.title || "(ohne Titel)")}</div>` +
+        (r.sub ? `<div class="gsr-sub">${escapeHtml(r.sub)}</div>` : "");
+      el.addEventListener("click", r.onClick);
+      box.appendChild(el);
+    });
+  });
+  box.classList.add("open");
+}
+
+document.getElementById("globalSearchInput").addEventListener("input", (e)=>{
+  const q = e.target.value;
+  renderGlobalSearchResults(searchGlobal(q), q);
+});
+document.getElementById("globalSearchInput").addEventListener("keydown", (e)=>{
+  if(e.key === "Escape"){ closeGlobalSearch(); e.target.blur(); }
+});
+document.addEventListener("click", (e)=>{
+  const wrap = document.querySelector(".global-search-wrap");
+  if(wrap && !wrap.contains(e.target)) document.getElementById("globalSearchResults").classList.remove("open");
+});
+
 /* ============ TABS ============ */
 document.querySelectorAll(".tab-btn").forEach(btn=>{
   btn.addEventListener("click", ()=>{
@@ -3827,6 +3975,7 @@ document.getElementById("btnSaveEvent").addEventListener("click", ()=>{
   renderCalendar();
 });
 document.getElementById("btnDeleteEvent").addEventListener("click", ()=>{
+  if(!confirm("Diesen Termin wirklich löschen?")) return;
   const id = document.getElementById("eventId").value;
   data.events = data.events.filter(e=>e.id!==id);
   persist({table:"events", op:"delete", id});
@@ -3904,6 +4053,7 @@ document.getElementById("btnSaveBirthday").addEventListener("click", ()=>{
   renderBirthdaysList();
 });
 document.getElementById("btnDeleteBirthday").addEventListener("click", ()=>{
+  if(!confirm("Diesen Geburtstag wirklich löschen?")) return;
   const id = document.getElementById("birthdayId").value;
   data.birthdays = data.birthdays.filter(b=>b.id!==id);
   persist({table:"birthdays", op:"delete", id});
@@ -4182,7 +4332,7 @@ function makeShopRow(item){
     row.appendChild(tag);
   }
   const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-  del.addEventListener("click", ()=>{ data.shopping = data.shopping.filter(i=>i.id!==item.id); persist({table:"shopping", op:"delete", id:item.id}); renderShopping(); renderDashboard(); });
+  del.addEventListener("click", ()=>{ if(!confirm(`"${item.text}" wirklich löschen?`)) return; data.shopping = data.shopping.filter(i=>i.id!==item.id); persist({table:"shopping", op:"delete", id:item.id}); renderShopping(); renderDashboard(); });
   row.appendChild(del);
   return row;
 }
@@ -4268,6 +4418,7 @@ document.getElementById("btnSaveShopEdit").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteShopEdit").addEventListener("click", ()=>{
+  if(!confirm("Diesen Eintrag wirklich löschen?")) return;
   const id = document.getElementById("shopEditId").value;
   data.shopping = data.shopping.filter(x=>x.id!==id);
   persist({table:"shopping", op:"delete", id});
@@ -4277,6 +4428,7 @@ document.getElementById("btnDeleteShopEdit").addEventListener("click", ()=>{
 });
 
 document.getElementById("btnClearDone").addEventListener("click", ()=>{
+  if(!confirm("Alle erledigten Einträge wirklich löschen?")) return;
   const removedIds = data.shopping.filter(i=>i.done).map(i=>i.id);
   data.shopping = data.shopping.filter(i=>!i.done);
   persist({table:"shopping", op:"deleteMany", ids:removedIds});
@@ -4389,6 +4541,7 @@ function makeInventoryRow(item){
   `;
   row.querySelector(".name").addEventListener("click", ()=> openInvEditModal(item));
   row.querySelector(".inv-del").addEventListener("click", ()=>{
+    if(!confirm(`"${item.name}" wirklich löschen?`)) return;
     data.inventory = data.inventory.filter(i=>i.id!==item.id);
     persist({table:"inventory", op:"delete", id:item.id});
     renderInventory();
@@ -4494,6 +4647,7 @@ document.getElementById("btnSaveInvEdit").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteInvEdit").addEventListener("click", ()=>{
+  if(!confirm("Diesen Bestandseintrag wirklich löschen?")) return;
   const id = document.getElementById("invEditId").value;
   data.inventory = data.inventory.filter(x=>x.id!==id);
   persist({table:"inventory", op:"delete", id});
@@ -4645,6 +4799,7 @@ function makeMedicationRow(med){
   del.title = "Entfernen";
   del.addEventListener("click", (e)=>{
     e.stopPropagation();
+    if(!confirm(`"${med.name}" wirklich entfernen?`)) return;
     logMedChange(med, "Eintrag", medSummary(med), "–", "deleted");
     data.medications = data.medications.filter(m=>m.id!==med.id);
     persist({table:"medications", op:"delete", id:med.id});
@@ -4746,6 +4901,7 @@ document.getElementById("btnSaveMedicationEdit").addEventListener("click", ()=>{
 });
 
 document.getElementById("btnDeleteMedication").addEventListener("click", ()=>{
+  if(!confirm("Dieses Medikament wirklich löschen?")) return;
   const id = document.getElementById("medEditId").value;
   const med = data.medications.find(m=>m.id===id);
   if(med){
@@ -4870,7 +5026,7 @@ function renderPayments(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); data.payments = data.payments.filter(x=>x.id!==p.id); persist({table:"payments", op:"delete", id:p.id}); renderPayments(); });
+      del.addEventListener("click", ()=>{ if(!confirm(`"${p.text}" wirklich löschen?`)) return; if(p.attachmentPath) deleteAttachment(p.attachmentPath); data.payments = data.payments.filter(x=>x.id!==p.id); persist({table:"payments", op:"delete", id:p.id}); renderPayments(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -4884,6 +5040,7 @@ function renderPayments(){
 }
 
 document.getElementById("btnClearDonePayments").addEventListener("click", ()=>{
+  if(!confirm("Alle erledigten Zahlungen wirklich löschen?")) return;
   const removed = data.payments.filter(p=>p.done);
   removed.forEach(p=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); });
   const removedIds = removed.map(p=>p.id);
@@ -4923,6 +5080,7 @@ document.getElementById("btnSavePaymentEdit").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeletePaymentEdit").addEventListener("click", ()=>{
+  if(!confirm("Diese Zahlung wirklich löschen?")) return;
   const id = document.getElementById("payEditId").value;
   const p = data.payments.find(x=>x.id===id);
   if(p && p.attachmentPath) deleteAttachment(p.attachmentPath);
@@ -4996,7 +5154,7 @@ function renderIncomingPayments(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); data.incomingPayments = data.incomingPayments.filter(x=>x.id!==p.id); persist({table:"incomingPayments", op:"delete", id:p.id}); renderIncomingPayments(); renderDashboard(); });
+      del.addEventListener("click", ()=>{ if(!confirm(`"${p.text}" wirklich löschen?`)) return; if(p.attachmentPath) deleteAttachment(p.attachmentPath); data.incomingPayments = data.incomingPayments.filter(x=>x.id!==p.id); persist({table:"incomingPayments", op:"delete", id:p.id}); renderIncomingPayments(); renderDashboard(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -5010,6 +5168,7 @@ function renderIncomingPayments(){
 }
 
 document.getElementById("btnClearDoneIncomingPayments").addEventListener("click", ()=>{
+  if(!confirm("Alle erledigten Zahlungseingänge wirklich löschen?")) return;
   const removed = data.incomingPayments.filter(p=>p.done);
   removed.forEach(p=>{ if(p.attachmentPath) deleteAttachment(p.attachmentPath); });
   const removedIds = removed.map(p=>p.id);
@@ -5050,6 +5209,7 @@ document.getElementById("btnSaveIncomingPaymentEdit").addEventListener("click", 
   renderDashboard();
 });
 document.getElementById("btnDeleteIncomingPaymentEdit").addEventListener("click", ()=>{
+  if(!confirm("Diesen Zahlungseingang wirklich löschen?")) return;
   const id = document.getElementById("incPayEditId").value;
   const p = data.incomingPayments.find(x=>x.id===id);
   if(p && p.attachmentPath) deleteAttachment(p.attachmentPath);
@@ -5124,7 +5284,7 @@ function renderVouchers(){
         row.appendChild(tag);
       }
       const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕";
-      del.addEventListener("click", ()=>{ if(v.attachmentPath) deleteAttachment(v.attachmentPath); data.vouchers = data.vouchers.filter(x=>x.id!==v.id); persist({table:"vouchers", op:"delete", id:v.id}); renderVouchers(); });
+      del.addEventListener("click", ()=>{ if(!confirm(`"${v.text}" wirklich löschen?`)) return; if(v.attachmentPath) deleteAttachment(v.attachmentPath); data.vouchers = data.vouchers.filter(x=>x.id!==v.id); persist({table:"vouchers", op:"delete", id:v.id}); renderVouchers(); });
       row.appendChild(del);
       body.appendChild(row);
     });
@@ -5138,6 +5298,7 @@ function renderVouchers(){
 }
 
 document.getElementById("btnClearRedeemedVouchers").addEventListener("click", ()=>{
+  if(!confirm("Alle eingelösten Gutscheine wirklich löschen?")) return;
   const removed = data.vouchers.filter(v=>v.redeemed);
   removed.forEach(v=>{ if(v.attachmentPath) deleteAttachment(v.attachmentPath); });
   const removedIds = removed.map(v=>v.id);
@@ -5175,6 +5336,7 @@ document.getElementById("btnSaveVoucherEdit").addEventListener("click", ()=>{
   renderVouchers();
 });
 document.getElementById("btnDeleteVoucherEdit").addEventListener("click", ()=>{
+  if(!confirm("Diesen Gutschein wirklich löschen?")) return;
   const id = document.getElementById("voucherEditId").value;
   const v = data.vouchers.find(x=>x.id===id);
   if(v && v.attachmentPath) deleteAttachment(v.attachmentPath);
@@ -5242,7 +5404,7 @@ function renderMessages(){
     body.appendChild(meta);
     body.addEventListener("click", ()=> openMessageEditModal(m));
     const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
-    del.addEventListener("click", ()=>{ data.messages = data.messages.filter(x=>x.id!==m.id); persist({table:"messages", op:"delete", id:m.id}); renderMessages(); renderDashboard(); });
+    del.addEventListener("click", ()=>{ if(!confirm(`"${m.title}" wirklich löschen?`)) return; data.messages = data.messages.filter(x=>x.id!==m.id); persist({table:"messages", op:"delete", id:m.id}); renderMessages(); renderDashboard(); });
     row.appendChild(bar); row.appendChild(body); row.appendChild(del);
     box.appendChild(row);
   });
@@ -5277,6 +5439,7 @@ document.getElementById("btnSaveMessageEdit").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteMessageEdit").addEventListener("click", ()=>{
+  if(!confirm("Diese Mitteilung wirklich löschen?")) return;
   const id = document.getElementById("msgEditId").value;
   data.messages = data.messages.filter(x=>x.id!==id);
   persist({table:"messages", op:"delete", id});
@@ -5338,7 +5501,7 @@ function renderChecklists(){
     clAssignee.addEventListener("change", (e)=>{ cl.assignee = e.target.value.trim(); persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
     const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
     del.title = "Checkliste löschen";
-    del.addEventListener("click", (e)=>{ e.stopPropagation(); data.checklists = data.checklists.filter(c=>c.id!==cl.id); persist({table:"checklists", op:"delete", id:cl.id}); renderChecklists(); renderDashboard(); });
+    del.addEventListener("click", (e)=>{ e.stopPropagation(); if(!confirm(`Checkliste "${cl.title}" wirklich komplett löschen?`)) return; data.checklists = data.checklists.filter(c=>c.id!==cl.id); persist({table:"checklists", op:"delete", id:cl.id}); renderChecklists(); renderDashboard(); });
     head.appendChild(chevron); head.appendChild(title); head.appendChild(progress); head.appendChild(clAssignee); head.appendChild(clDate); head.appendChild(del);
     head.addEventListener("click", ()=>{ cl.open = !cl.open; persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); });
     card.appendChild(head);
@@ -5359,7 +5522,7 @@ function renderChecklists(){
       itemDate.value = item.date || "";
       itemDate.addEventListener("change", (e)=>{ item.date = e.target.value || null; persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
       const idel = document.createElement("button"); idel.className="btn-icon"; idel.textContent="✕";
-      idel.addEventListener("click", ()=>{ cl.items = cl.items.filter(i=>i.id!==item.id); persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
+      idel.addEventListener("click", ()=>{ if(!confirm(`"${item.text}" wirklich löschen?`)) return; cl.items = cl.items.filter(i=>i.id!==item.id); persist({table:"checklists", op:"upsert", item:cl}); renderChecklists(); renderDashboard(); });
       row.appendChild(chk); row.appendChild(txt); row.appendChild(itemAssignee); row.appendChild(itemDate); row.appendChild(idel);
       body.appendChild(row);
     });
@@ -5448,7 +5611,7 @@ function makeWhereisRow(w){
     row.appendChild(a);
   }
   const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
-  del.addEventListener("click", ()=>{ if(w.attachmentPath) deleteAttachment(w.attachmentPath); data.whereis = data.whereis.filter(x=>x.id!==w.id); persist({table:"whereis", op:"delete", id:w.id}); renderWhereis(); renderDashboard(); });
+  del.addEventListener("click", ()=>{ if(!confirm(`"${w.name}" wirklich löschen?`)) return; if(w.attachmentPath) deleteAttachment(w.attachmentPath); data.whereis = data.whereis.filter(x=>x.id!==w.id); persist({table:"whereis", op:"delete", id:w.id}); renderWhereis(); renderDashboard(); });
   row.appendChild(del);
   return row;
 }
@@ -5524,6 +5687,7 @@ document.getElementById("btnSaveWhereisEdit").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteWhereisEdit").addEventListener("click", ()=>{
+  if(!confirm("Diesen Eintrag wirklich löschen?")) return;
   const id = document.getElementById("whereEditId").value;
   const w = data.whereis.find(x=>x.id===id);
   if(w && w.attachmentPath) deleteAttachment(w.attachmentPath);
@@ -5586,7 +5750,7 @@ function renderLinks(){
       a.textContent = "🔗 Öffnen"; a.style.cssText = "font-size:12px;font-weight:700;color:var(--blue);white-space:nowrap;";
       row.appendChild(a);
       const del = document.createElement("button"); del.className = "btn-icon"; del.textContent = "✕";
-      del.addEventListener("click", ()=>{ data.links = data.links.filter(x=>x.id!==l.id); persist({table:"links", op:"delete", id:l.id}); renderLinks(); renderDashboard(); });
+      del.addEventListener("click", ()=>{ if(!confirm(`"${l.title}" wirklich löschen?`)) return; data.links = data.links.filter(x=>x.id!==l.id); persist({table:"links", op:"delete", id:l.id}); renderLinks(); renderDashboard(); });
       row.appendChild(del);
       block.appendChild(row);
     });
@@ -5625,6 +5789,7 @@ document.getElementById("btnSaveLink").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteLink").addEventListener("click", ()=>{
+  if(!confirm("Diesen Link wirklich löschen?")) return;
   const id = document.getElementById("linkEditId").value;
   data.links = data.links.filter(x=>x.id!==id);
   persist({table:"links", op:"delete", id});
@@ -5737,6 +5902,7 @@ function renderChatMessages(){
     row.className = "chat-msg" + (m.senderName===mySender ? " own" : "");
     const del = document.createElement("button"); del.className = "chat-del"; del.textContent = "✕"; del.title = "Löschen";
     del.addEventListener("click", ()=>{
+      if(!confirm("Diese Nachricht wirklich löschen?")) return;
       data.chatMessages = data.chatMessages.filter(x=>x.id!==m.id);
       persist({table:"chatMessages", op:"delete", id:m.id});
       renderChatMessages();
@@ -5870,7 +6036,8 @@ function renderResourceList(){
 
 function deleteResource(id){
   const bookingCount = data.roomBookings.filter(b=>b.resourceId===id).length;
-  if(bookingCount>0 && !confirm(`Diese Ressource hat ${bookingCount} Buchung(en). Ressource inkl. aller Buchungen wirklich löschen?`)) return;
+  const msg = bookingCount>0 ? `Diese Ressource hat ${bookingCount} Buchung(en). Ressource inkl. aller Buchungen wirklich löschen?` : "Diese Ressource wirklich löschen?";
+  if(!confirm(msg)) return;
   const removedBookingIds = data.roomBookings.filter(b=>b.resourceId===id).map(b=>b.id);
   data.resources = data.resources.filter(r=>r.id!==id);
   data.roomBookings = data.roomBookings.filter(b=>b.resourceId!==id);
@@ -6071,6 +6238,7 @@ document.getElementById("btnSaveRoomBooking").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteRoomBooking").addEventListener("click", ()=>{
+  if(!confirm("Diese Buchung wirklich löschen?")) return;
   const id = document.getElementById("rbEditId").value;
   data.roomBookings = data.roomBookings.filter(x=>x.id!==id);
   persist({table:"roomBookings", op:"delete", id});
@@ -6168,7 +6336,7 @@ function renderWeather(){
     const refresh = document.createElement("button"); refresh.className="btn-icon"; refresh.textContent="⟳"; refresh.title="Aktualisieren";
     refresh.addEventListener("click", (e)=>{ e.stopPropagation(); fetchWeatherFor(city.id); });
     const del = document.createElement("button"); del.className="btn-icon"; del.textContent="✕"; del.title="Entfernen";
-    del.addEventListener("click", (e)=>{ e.stopPropagation(); data.cities = data.cities.filter(c=>c.id!==city.id); persist({table:"cities", op:"delete", id:city.id}); renderWeather(); renderDashboard(); });
+    del.addEventListener("click", (e)=>{ e.stopPropagation(); if(!confirm(`"${city.name}" wirklich entfernen?`)) return; data.cities = data.cities.filter(c=>c.id!==city.id); persist({table:"cities", op:"delete", id:city.id}); renderWeather(); renderDashboard(); });
     actions.appendChild(pin); actions.appendChild(refresh); actions.appendChild(del);
     card.appendChild(actions);
     card.addEventListener("click", ()=> openForecastModal(city.id));
@@ -6564,6 +6732,7 @@ document.getElementById("btnSaveContract").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteContract").addEventListener("click", ()=>{
+  if(!confirm("Diesen Vertrag wirklich löschen?")) return;
   const id = document.getElementById("contractId").value;
   const c = data.contracts.find(x=>x.id===id);
   if(c && c.attachmentPath) deleteAttachment(c.attachmentPath);
@@ -6658,6 +6827,7 @@ document.getElementById("btnSaveAsset").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteAsset").addEventListener("click", ()=>{
+  if(!confirm("Diesen Eintrag wirklich löschen?")) return;
   const id = document.getElementById("assetId").value;
   const a = data.assets.find(x=>x.id===id);
   if(a && a.attachmentPath) deleteAttachment(a.attachmentPath);
@@ -6815,6 +6985,7 @@ document.getElementById("btnSaveIncome").addEventListener("click", ()=>{
   renderDashboard();
 });
 document.getElementById("btnDeleteIncome").addEventListener("click", ()=>{
+  if(!confirm("Diesen Eintrag wirklich löschen?")) return;
   const id = document.getElementById("incomeId").value;
   data.income = data.income.filter(i=>i.id!==id);
   persist({table:"income", op:"delete", id});
@@ -6928,6 +7099,7 @@ document.getElementById("btnSaveContact").addEventListener("click", ()=>{
   populateAllContactLinkSelects();
 });
 document.getElementById("btnDeleteContact").addEventListener("click", ()=>{
+  if(!confirm("Diesen Kontakt wirklich löschen?")) return;
   const id = document.getElementById("contactId").value;
   data.contacts = data.contacts.filter(c=>c.id!==id);
   persist({table:"contacts", op:"delete", id});
